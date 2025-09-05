@@ -1,27 +1,29 @@
 <h1 align="center">ptyx — Cross-Platform PTY/TTY Toolkit</h1>
 
 <p align="center">
-  <img width="250" src="docs/logo.svg" alt="ptyx" />
+  <img width="250" src="docs/logo.svg" alt="ptyx logo" />
 <p>
 
 <p align="center">
+  <a href="https://github.com/KennethanCeyer/ptyx/actions/workflows/ci.yaml"><img alt="CI Status" src="https://github.com/KennethanCeyer/ptyx/actions/workflows/ci.yaml/badge.svg"></a>
   <a href="https://go.dev"><img alt="Go" src="https://img.shields.io/badge/Go-%3E=1.24-00ADD8?logo=go"></a>
   <a href="https://pkg.go.dev/github.com/KennethanCeyer/ptyx"><img alt="Go Reference" src="https://pkg.go.dev/badge/github.com/KennethanCeyer/ptyx.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg"></a>
-  <img alt="OS" src="https://img.shields.io/badge/OS-macOS%20|%20Linux%20|%20WSL%20|%20Windows-blue.svg">
+  <img alt="Platform" src="https://img.shields.io/badge/Platform-macOS%20|%20Linux%20|%20Windows-blue.svg">
 </p>
 
 ---
 
 ## Overview
 
-`ptyx` is a Go library for managing pseudo-terminals (PTY) and terminal TTYs across multiple platforms.
+`ptyx` is a Go library that provides a simple, cross-platform API for managing pseudo-terminals (PTY) and terminal TTYs.
 
-- **Console**: Control the local terminal with features like raw mode, size detection, resize notifications, and VT mode enablement (Windows).
-- **Session**: Spawn child processes within a PTY on Unix-like systems (Linux, macOS, BSD) and with ConPTY on Windows.
-- **Mux**: Easily multiplex I/O between the console and the PTY session.
+## Features
 
-`ptyx` has no dependencies other than `golang.org/x/sys` and `golang.org/x/term`.
+- **Cross-Platform Sessions**: Spawn child processes within a PTY on Unix-like systems (Linux, macOS, BSD) and with ConPTY on Windows.
+- **Terminal Control**: Manage the local terminal with features like raw mode, size detection, and resize notifications.
+- **I/O Multiplexing**: A simple `Mux` utility to bridge the gap between the local console and the PTY session.
+- **Zero Dependencies**: No external dependencies beyond the official `golang.org/x/sys` and `golang.org/x/term` packages.
 
 ---
 
