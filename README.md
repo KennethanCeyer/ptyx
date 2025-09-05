@@ -92,6 +92,8 @@ func runShell() {
 
   st, err := c.MakeRaw()
   if err != nil {
+    // On Windows, MakeRaw can fail if not in a standard terminal.
+    // We can proceed without it, but the experience will be degraded.
     log.Printf("failed to enter raw mode: %v", err)
   } else {
     defer c.Restore(st)
