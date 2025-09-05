@@ -3,34 +3,44 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	"github.com/KennethanCeyer/ptyx"
 	"github.com/KennethanCeyer/ptyx/cmd/internal"
 )
 
-func parseRunOpts(args []string) (*ptyx.SpawnOpts, error) {
-	if len(args) == 0 {
-		return nil, errors.New("usage: run -- <prog> [args...]")
+func getProjectRoot() (string, error) {
+	_, b, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("cannot determine project root: runtime.Caller failed")
 	}
-	return &ptyx.SpawnOpts{
-		Prog: args[0],
-		Args: args[1:],
-	}, nil
+	projectRoot := filepath.Join(filepath.Dir(b), "..", "..")
+	return projectRoot, nil
 }
 
 func main() {
-	flag.Parse()
-	opts, err := parseRunOpts(flag.Args())
+	projectRoot, err := getProjectRoot()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return
+		os.Exit(1)
 	}
 
-	if err := internal.RunInPty(context.Background(), *opts); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
+	fmt.Println("--- Running 'go run ./cmd/shell' in a PTY (nested PTY) ---")
+
+	opts := ptyx.SpawnOpts{
+		Prog: "go",
+		Args: []string{"run", "./cmd/shell"},
+		Dir:  projectRoot,
+	}
+
+	err = internal.RunInPty(context.Background(), opts)
+	fmt.Println("\n--- Nested shell test finished ---")
+	if err != nil {
+		if _, ok := err.(*ptyx.ExitError); !ok {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+		}
 	}
 }

@@ -37,6 +37,9 @@ func (m *mux) Start(c Console, s Session) error {
 	go func() {
 		defer m.wg.Done()
 		io.Copy(c.Out(), s.PtyReader())
+		if closer, ok := c.In().(io.Closer); ok {
+			_ = closer.Close()
+		}
 		m.cancel()
 	}()
 	return nil

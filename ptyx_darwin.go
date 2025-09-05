@@ -30,29 +30,6 @@ func openPtyFallback() (*os.File, *os.File, error) {
 	return nil, nil, fmt.Errorf("out of PTY devices")
 }
 
-func ptsname(f *os.File) (string, error) {
-	snameBuf := make([]byte, 128)
-	err := ioctl(f.Fd(), unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&snameBuf[0])))
-	if err != nil {
-		return "", err
-	}
-	return "/dev/" + string(snameBuf[:clen(snameBuf)]), nil
-}
-
-func grantpt(sname string) error {
-	if err := os.Chown(sname, os.Getuid(), os.Getgid()); err != nil {
-		return fmt.Errorf("grantpt: chown: %w", err)
-	}
-	if err := os.Chmod(sname, 0620); err != nil {
-		return fmt.Errorf("grantpt: chmod: %w", err)
-	}
-	return nil
-}
-
-func unlockpt(f *os.File) error {
-	return ioctl(f.Fd(), unix.TIOCPTYUNLK, 0)
-}
-
 func openPTY() (pty, tty *os.File, err error) {
 	pty, err = os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
@@ -68,22 +45,23 @@ func openPTY() (pty, tty *os.File, err error) {
 		}
 	}()
 
-	var sname string
-	sname, err = ptsname(pty)
+	snameBuf := make([]byte, 128)
+	err = ioctl(pty.Fd(), unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&snameBuf[0])))
 	if err != nil {
 		if errors.Is(err, unix.ENOTTY) {
 			_ = pty.Close()
 			return openPtyFallback()
 		}
-		return nil, nil, fmt.Errorf("ptsname: %w", err)
+		return nil, nil, fmt.Errorf("ioctl(TIOCPTYGNAME): %w", err)
+	}
+	sname := string(snameBuf[:clen(snameBuf)])
+
+	if err = ioctl(pty.Fd(), unix.TIOCPTYGRANT, 0); err != nil {
+		return nil, nil, fmt.Errorf("ioctl(TIOCPTYGRANT): %w", err)
 	}
 
-	if err = grantpt(sname); err != nil {
-		return nil, nil, err
-	}
-
-	if err = unlockpt(pty); err != nil {
-		return nil, nil, fmt.Errorf("unlockpt: %w", err)
+	if err = ioctl(pty.Fd(), unix.TIOCPTYUNLK, 0); err != nil {
+		return nil, nil, fmt.Errorf("ioctl(TIOCPTYUNLK): %w", err)
 	}
 
 	tty, err = os.OpenFile(sname, os.O_RDWR|unix.O_NOCTTY, 0)
