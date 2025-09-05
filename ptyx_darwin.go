@@ -11,56 +11,85 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	ioctl_TIOCPTYGNAME = 0x80407461
-	ioctl_TIOCPTYUNLK = 0x20007462
-)
+func openPtyFallback() (*os.File, *os.File, error) {
+	for i := 0; i < 256; i++ {
+		masterPath := fmt.Sprintf("/dev/pty%c%x", 'p'+i/16, i%16)
+		master, err := os.OpenFile(masterPath, os.O_RDWR, 0)
+		if err != nil {
+			continue
+		}
 
-func openPTY() (*os.File, *os.File, error) {
-	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+		slavePath := fmt.Sprintf("/dev/tty%c%x", 'p'+i/16, i%16)
+		slave, err := os.OpenFile(slavePath, os.O_RDWR|unix.O_NOCTTY, 0)
+		if err != nil {
+			_ = master.Close()
+			continue
+		}
+		return master, slave, nil
+	}
+	return nil, nil, fmt.Errorf("out of PTY devices")
+}
+
+func ptsname(f *os.File) (string, error) {
+	snameBuf := make([]byte, 128)
+	err := ioctl(f.Fd(), unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&snameBuf[0])))
 	if err != nil {
+		return "", err
+	}
+	return "/dev/" + string(snameBuf[:clen(snameBuf)]), nil
+}
+
+func grantpt(sname string) error {
+	if err := os.Chown(sname, os.Getuid(), os.Getgid()); err != nil {
+		return fmt.Errorf("grantpt: chown: %w", err)
+	}
+	if err := os.Chmod(sname, 0620); err != nil {
+		return fmt.Errorf("grantpt: chmod: %w", err)
+	}
+	return nil
+}
+
+func unlockpt(f *os.File) error {
+	return ioctl(f.Fd(), unix.TIOCPTYUNLK, 0)
+}
+
+func openPTY() (pty, tty *os.File, err error) {
+	pty, err = os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			return openPtyFallback()
+		}
 		return nil, nil, err
 	}
 
 	defer func() {
 		if err != nil {
-			_ = master.Close()
+			_ = pty.Close()
 		}
 	}()
 
 	var sname string
-	snameBuf := make([]byte, 128)
-	err = ioctl(master.Fd(), ioctl_TIOCPTYGNAME, uintptr(unsafe.Pointer(&snameBuf[0])))
+	sname, err = ptsname(pty)
 	if err != nil {
 		if errors.Is(err, unix.ENOTTY) {
-			var readlinkErr error
-			sname, readlinkErr = os.Readlink(fmt.Sprintf("/dev/fd/%d", master.Fd()))
-			if readlinkErr != nil {
-				return nil, nil, fmt.Errorf("ioctl(TIOCPTYGNAME) failed and fallback Readlink also failed: %w; readlink error: %v", err, readlinkErr)
-			}
-			err = nil
-		} else {
-			return nil, nil, fmt.Errorf("ioctl(TIOCPTYGNAME): %w", err)
+			_ = pty.Close()
+			return openPtyFallback()
 		}
-	} else {
-		sname = "/dev/" + string(snameBuf[:clen(snameBuf)])
+		return nil, nil, fmt.Errorf("ptsname: %w", err)
 	}
 
-	if err = os.Chown(sname, os.Getuid(), os.Getgid()); err != nil {
-		return nil, nil, fmt.Errorf("grantpt: chown: %w", err)
-	}
-	if err = os.Chmod(sname, 0620); err != nil {
-		return nil, nil, fmt.Errorf("grantpt: chmod: %w", err)
+	if err = grantpt(sname); err != nil {
+		return nil, nil, err
 	}
 
-	if err = ioctl(master.Fd(), ioctl_TIOCPTYUNLK, 0); err != nil {
-		return nil, nil, fmt.Errorf("ioctl(TIOCPTYUNLK): %w", err)
+	if err = unlockpt(pty); err != nil {
+		return nil, nil, fmt.Errorf("unlockpt: %w", err)
 	}
 
-	slave, err := os.OpenFile(sname, os.O_RDWR|unix.O_NOCTTY, 0)
+	tty, err = os.OpenFile(sname, os.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return master, slave, nil
+	return pty, tty, nil
 }
