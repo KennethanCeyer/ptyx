@@ -8,19 +8,51 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 type winSession struct {
-	con     *conPty
+	con     *ConPty
 	pid     int
 	process windows.Handle
+	thread  windows.Handle
+	closeOnce sync.Once
 }
 
-func Spawn(opts SpawnOpts) (sess Session, err error) {
-	con, err := newConPty(opts.Cols, opts.Rows)
+func buildCommandLine(prog string, args []string) string {
+	allArgs := make([]string, 0, 1+len(args))
+	allArgs = append(allArgs, prog)
+	allArgs = append(allArgs, args...)
+	var b strings.Builder
+	for i, v := range allArgs {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(windows.EscapeArg(v))
+	}
+	return b.String()
+}
+
+func buildEnvBlock(env []string) []uint16 {
+	if len(env) == 0 {
+		return nil
+	}
+	cleanEnv := make([]string, 0, len(env))
+	for _, s := range env {
+		if !strings.ContainsRune(s, 0) {
+			cleanEnv = append(cleanEnv, s)
+		}
+	}
+	blockStr := strings.Join(cleanEnv, "\x00") + "\x00\x00"
+	return utf16.Encode([]rune(blockStr))
+}
+
+func Spawn(opts SpawnOpts) (Session, error) {
+	con, err := NewConPty(opts.Cols, opts.Rows, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -35,29 +67,20 @@ func Spawn(opts SpawnOpts) (sess Session, err error) {
 		return nil, err
 	}
 
-	var cmdlineBuilder strings.Builder
-	cmdlineBuilder.WriteString(windows.EscapeArg(progPath))
-	for _, arg := range opts.Args {
-		cmdlineBuilder.WriteByte(' ')
-		cmdlineBuilder.WriteString(windows.EscapeArg(arg))
-	}
-
+	cmdline := buildCommandLine(progPath, opts.Args)
 	siEx := new(windows.StartupInfoEx)
-	siEx.StartupInfo.Cb = uint32(unsafe.Sizeof(*siEx))
+	siEx.Flags = windows.STARTF_USESTDHANDLES
+	siEx.Cb = uint32(unsafe.Sizeof(*siEx))
 	siEx.ProcThreadAttributeList = con.attrList.List()
 
 	pi := new(windows.ProcessInformation)
+	flags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT)
 
-	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT) | windows.EXTENDED_STARTUPINFO_PRESENT
-
-	pProgPath, err := windows.UTF16PtrFromString(progPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert program path to UTF16: %w", err)
-	}
-	pCmdline, err := windows.UTF16PtrFromString(cmdlineBuilder.String())
+	pCmdline, err := windows.UTF16PtrFromString(cmdline)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert command line to UTF16: %w", err)
 	}
+
 	var pDir *uint16
 	if opts.Dir != "" {
 		pDir, err = windows.UTF16PtrFromString(opts.Dir)
@@ -65,87 +88,90 @@ func Spawn(opts SpawnOpts) (sess Session, err error) {
 			return nil, fmt.Errorf("failed to convert directory to UTF16: %w", err)
 		}
 	}
-	env := append(os.Environ(), opts.Env...)
+
+	var env []string
+	if opts.Env != nil {
+		env = opts.Env
+	} else {
+		env = os.Environ()
+	}
+	envBlock := buildEnvBlock(env)
+	var pEnv *uint16
+	if len(envBlock) > 0 {
+		pEnv = &envBlock[0]
+	}
 
 	err = windows.CreateProcess(
-		pProgPath,
+		nil,
 		pCmdline,
 		nil,
 		nil,
 		false,
-		creationFlags,
-		createEnvBlock(env),
+		flags,
+		pEnv,
 		pDir,
 		&siEx.StartupInfo,
 		pi,
 	)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create process: %w", err)
 	}
-
-	_ = windows.CloseHandle(pi.Thread)
 
 	return &winSession{
 		con:     con,
 		pid:     int(pi.ProcessId),
 		process: pi.Process,
+		thread:  pi.Thread,
 	}, nil
 }
 
-func createEnvBlock(env []string) *uint16 {
-	if len(env) == 0 {
-		return nil
-	}
-	cleanEnv := make([]string, 0, len(env))
-	for _, e := range env {
-		if !strings.ContainsRune(e, 0) {
-			cleanEnv = append(cleanEnv, e)
-		}
-	}
-
-	var block []uint16
-	for _, e := range cleanEnv {
-		u16, err := windows.UTF16FromString(e)
-		if err != nil {
-			continue
-		}
-		block = append(block, u16...)
-	}
-	block = append(block, 0)
-	return &block[0]
-}
-
-func (s *winSession) PtyReader() io.Reader { return s.con.conout }
-func (s *winSession) PtyWriter() io.Writer { return s.con.conin }
+func (s *winSession) PtyReader() io.Reader        { return s.con.outFile }
+func (s *winSession) PtyWriter() io.Writer        { return s.con.inFile }
 func (s *winSession) Resize(cols, rows int) error { return s.con.resize(cols, rows) }
+func (s *winSession) Pid() int                    { return s.pid }
+
 func (s *winSession) Wait() error {
-	status, err := windows.WaitForSingleObject(s.process, windows.INFINITE)
+	st, err := windows.WaitForSingleObject(s.process, windows.INFINITE)
 	if err != nil {
 		return err
 	}
-	if status != windows.WAIT_OBJECT_0 {
-		return fmt.Errorf("unexpected wait status: %d", status)
+	if st != windows.WAIT_OBJECT_0 {
+		return fmt.Errorf("unexpected wait status: %d", st)
 	}
-	var exitCode uint32
-	if err := windows.GetExitCodeProcess(s.process, &exitCode); err != nil {
+	var code uint32
+	if err := windows.GetExitCodeProcess(s.process, &code); err != nil {
 		return err
 	}
-	if exitCode == 0 {
+	if code == 0 {
 		return nil
 	}
-	return &ExitError{ExitCode: int(exitCode)}
+	return &ExitError{ExitCode: int(code)}
 }
+
 func (s *winSession) Kill() error {
 	return windows.TerminateProcess(s.process, 1)
 }
+
 func (s *winSession) Close() error {
-	_ = s.Kill()
-	_ = windows.CloseHandle(s.process)
-	if s.con != nil {
-		return s.con.Close()
-	}
-	return nil
+	var err error
+	s.closeOnce.Do(func() {
+		if s.con != nil {
+			err = s.con.Close()
+		}
+		if s.process != 0 {
+			_ = windows.CloseHandle(s.process)
+		}
+		if s.thread != 0 {
+			_ = windows.CloseHandle(s.thread)
+		}
+	})
+	return err
 }
-func (s *winSession) Pid() int {
-	return s.pid
+
+func (s *winSession) CloseStdin() error {
+	if s == nil || s.con == nil || s.con.inFile == nil {
+		return nil
+	}
+	return s.con.inFile.Close()
 }

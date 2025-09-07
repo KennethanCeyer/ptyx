@@ -49,3 +49,4 @@ func (m *mockSession) Wait() error                 { return nil }
 func (m *mockSession) Kill() error                 { return nil }
 func (m *mockSession) Close() error                { return nil }
 func (m *mockSession) Pid() int                    { return 1234 }
+func (m *mockSession) CloseStdin() error           { return nil }

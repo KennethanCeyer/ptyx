@@ -2,6 +2,7 @@ package ptyx
 
 import (
 	"errors"
+	"io"
 	"testing"
 )
 
@@ -10,6 +11,12 @@ type errorReader struct{}
 func (r *errorReader) Read(p []byte) (n int, err error) {
 	return 0, errors.New("i am a bad reader")
 }
+
+type mockCloser struct {
+	io.Reader
+}
+
+func (mc *mockCloser) Close() error { return nil }
 
 func TestMux(t *testing.T) {
 	t.Run("ConsoleToPty", func(t *testing.T) {

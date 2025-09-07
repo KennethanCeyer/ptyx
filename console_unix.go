@@ -1,4 +1,4 @@
-//go:build unix || darwin || linux || freebsd || netbsd || openbsd
+//go:build linux || darwin || freebsd || netbsd || openbsd
 
 package ptyx
 
@@ -14,9 +14,17 @@ type rawState struct{ st *term.State; fd int }
 type winWatcher struct{ C chan struct{}; ch chan os.Signal }
 
 func NewConsole() (Console, error) {
-	c := &console{ in: os.Stdin, out: os.Stdout, err: os.Stderr }
-	c.outTTY = term.IsTerminal(int(c.out.Fd()))
+	c := &console{in: os.Stdin, out: os.Stdout, err: os.Stderr}
+	if c.out == nil {
+		return nil, ErrNotAConsole
+	}
+	fd := int(c.out.Fd())
+	if !term.IsTerminal(fd) {
+		return nil, ErrNotAConsole
+	}
+	c.outTTY = true
 	c.errTTY = term.IsTerminal(int(c.err.Fd()))
+
 	c.win = &winWatcher{C: make(chan struct{}, 1), ch: make(chan os.Signal, 1)}
 	signal.Notify(c.win.ch, syscall.SIGWINCH)
 	go func() {
@@ -37,17 +45,23 @@ func (c *console) Size() (int, int) {
 }
 
 func (c *console) MakeRaw() (RawState, error) {
+	if c.in == nil {
+		return nil, ErrNotAConsole
+	}
 	fd := int(c.in.Fd())
+	if !term.IsTerminal(fd) {
+		return nil, ErrNotAConsole
+	}
 	st, err := term.MakeRaw(fd)
 	if err != nil { return nil, err }
 	r := &rawState{st: st, fd: fd}
 	c.raw = r
 	return r, nil
 }
-
 func (c *console) Restore(s RawState) error {
 	r, ok := s.(*rawState)
 	if !ok || r == nil || r.st == nil { return nil }
+
 	err := term.Restore(r.fd, r.st)
 	if err == nil { c.raw = nil }
 	return err

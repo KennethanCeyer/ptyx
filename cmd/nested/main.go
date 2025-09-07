@@ -37,10 +37,7 @@ func main() {
 	}
 
 	err = internal.RunInPty(context.Background(), opts)
-	fmt.Println("\n--- Nested shell test finished ---")
 	if err != nil {
-		if _, ok := err.(*ptyx.ExitError); !ok {
-			fmt.Fprintln(os.Stderr, "Error:", err)
-		}
+		fmt.Fprintln(os.Stderr, "Error:", err)
 	}
 }

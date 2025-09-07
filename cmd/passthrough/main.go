@@ -29,10 +29,9 @@ func main() {
 	}
 
 	err := internal.RunInPty(context.Background(), opts)
-	fmt.Println("\n--- Passthrough test finished ---")
 	if err != nil {
 		var exitErr *ptyx.ExitError
-		if !errors.As(err, &exitErr) {
+		if !errors.As(err, &exitErr) || exitErr.ExitCode != 0 {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 		}
 	}

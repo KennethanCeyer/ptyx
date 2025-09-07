@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-var ErrMuxAlreadyStarted = errors.New("ptyx: mux can only be started once")
+var ErrMuxAlreadyStarted = errors.New("ptyx: mux already started")
 
 type ExitError struct {
 	ExitCode int

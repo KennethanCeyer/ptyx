@@ -11,16 +11,18 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type conPty struct {
-	handle   windows.Handle
-	conin    *os.File // The pipe for writing to the PTY (our stdin)
-	conout   *os.File // The pipe for reading from the PTY (our stdout)
+type ConPty struct {
+	hpc           *windows.Handle
+	inR_hostWrite windows.Handle
+	outR_hostRead windows.Handle
+	inFile        *os.File
+	outFile       *os.File
 	attrList *windows.ProcThreadAttributeListContainer
-	closeMu  sync.Mutex
-	closed   bool
+	size          windows.Coord
+	closeOnce sync.Once
 }
 
-func newConPty(w, h int) (c *conPty, err error) {
+func NewConPty(w, h int, flags uint32) (c *ConPty, err error) {
 	if w <= 0 {
 		w = 80
 	}
@@ -28,93 +30,96 @@ func newConPty(w, h int) (c *conPty, err error) {
 		h = 25
 	}
 
-	var ptyIn, ptyOut windows.Handle
-	var coninPipe, conoutPipe *os.File
+	c = &ConPty{
+		hpc:  new(windows.Handle),
+		size: windows.Coord{X: int16(w), Y: int16(h)},
+	}
 
-	var ptyInRead, ptyInWrite windows.Handle
-	if err = windows.CreatePipe(&ptyInRead, &ptyInWrite, nil, 0); err != nil {
+	var ptyInRead, ptyOutWrite windows.Handle
+
+	if err = windows.CreatePipe(&ptyInRead, &c.inR_hostWrite, nil, 0); err != nil {
 		return nil, fmt.Errorf("failed to create input pipe for pseudo console: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = windows.CloseHandle(ptyInRead)
-			_ = windows.CloseHandle(ptyInWrite)
-		}
-	}()
 
-	var ptyOutRead, ptyOutWrite windows.Handle
-	if err = windows.CreatePipe(&ptyOutRead, &ptyOutWrite, nil, 0); err != nil {
+	if err = windows.CreatePipe(&c.outR_hostRead, &ptyOutWrite, nil, 0); err != nil {
 		return nil, fmt.Errorf("failed to create output pipe for pseudo console: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = windows.CloseHandle(ptyOutRead)
-			_ = windows.CloseHandle(ptyOutWrite)
-		}
-	}()
 
-	ptyIn = ptyInRead
-	ptyOut = ptyOutWrite
-	coninPipe = os.NewFile(uintptr(ptyInWrite), "pty-input-writer")
-	conoutPipe = os.NewFile(uintptr(ptyOutRead), "pty-output-reader")
+	if err = windows.SetHandleInformation(c.inR_hostWrite, windows.HANDLE_FLAG_INHERIT, 0); err != nil {
+		return nil, fmt.Errorf("failed to set handle information for input pipe: %w", err)
+	}
 
-	size := windows.Coord{X: int16(w), Y: int16(h)}
-	var hpc windows.Handle
+	if err = windows.SetHandleInformation(c.outR_hostRead, windows.HANDLE_FLAG_INHERIT, 0); err != nil {
+		return nil, fmt.Errorf("failed to set handle information for output pipe: %w", err)
+	}
 
-	err = windows.CreatePseudoConsole(size, ptyIn, ptyOut, 0, &hpc)
+	err = windows.CreatePseudoConsole(c.size, ptyInRead, ptyOutWrite, flags, c.hpc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pseudo console: %w", err)
 	}
 
-	_ = windows.CloseHandle(ptyIn)
-	_ = windows.CloseHandle(ptyOut)
+	if err := windows.CloseHandle(ptyInRead); err != nil {
+		return nil, fmt.Errorf("failed to close pseudo console handle: %w", err)
+	}
+	if err := windows.CloseHandle(ptyOutWrite); err != nil {
+		return nil, fmt.Errorf("failed to close pseudo console handle: %w", err)
+	}
 
-	attrList, err := windows.NewProcThreadAttributeList(1)
+	c.inFile = os.NewFile(uintptr(c.inR_hostWrite), "conpty-stdin")
+	c.outFile = os.NewFile(uintptr(c.outR_hostRead), "conpty-stdout")
+
+	c.attrList, err = windows.NewProcThreadAttributeList(1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create proc thread attribute list: %w", err)
 	}
 
-	err = attrList.Update(windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, unsafe.Pointer(hpc), unsafe.Sizeof(hpc))
+	err = c.attrList.Update(
+		windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+		unsafe.Pointer(*c.hpc),
+		unsafe.Sizeof(*c.hpc),
+	)
+
 	if err != nil {
-		attrList.Delete()
+		c.attrList.Delete()
 		return nil, fmt.Errorf("failed to update proc thread attributes: %w", err)
 	}
 
-	return &conPty{
-		handle:   hpc,
-		conin:    coninPipe,
-		conout:   conoutPipe,
-		attrList: attrList,
-	}, nil
+	return c, nil
 }
 
-func (c *conPty) Close() error {
-	c.closeMu.Lock()
-	defer c.closeMu.Unlock()
-	if c.closed {
-		return nil
-	}
-	c.closed = true
+func (c *ConPty) ClosePty() {
+	c.closeOnce.Do(func() {
+		if c.hpc != nil && *c.hpc != 0 {
+			windows.ClosePseudoConsole(*c.hpc)
+		}
+	})
+}
 
+func (c *ConPty) Close() error {
+	c.ClosePty()
 	if c.attrList != nil {
 		c.attrList.Delete()
+		c.attrList = nil
 	}
-
-	windows.ClosePseudoConsole(c.handle)
-
-	err1 := c.conin.Close()
-	err2 := c.conout.Close()
-
-	if err1 != nil {
-		return err1
+	var e1, e2 error
+	if c.inFile != nil {
+		e1 = c.inFile.Close()
+		c.inFile = nil
 	}
-	return err2
+	if c.outFile != nil {
+		e2 = c.outFile.Close()
+		c.outFile = nil
+	}
+	if e1 != nil {
+		return e1
+	}
+	return e2
 }
 
-func (c *conPty) resize(w, h int) error {
+func (c *ConPty) resize(w, h int) error {
 	if c == nil {
 		return nil
 	}
-	size := windows.Coord{X: int16(w), Y: int16(h)}
-	return windows.ResizePseudoConsole(c.handle, size)
+	c.size = windows.Coord{X: int16(w), Y: int16(h)}
+	return windows.ResizePseudoConsole(*c.hpc, c.size)
 }

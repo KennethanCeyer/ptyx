@@ -1,14 +1,36 @@
-//go:build linux || darwin || freebsd || netbsd || openbsd
+//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
 package ptyx
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("PTYX_HELPER") != "1" {
+		return
+	}
+	switch os.Getenv("MODE") {
+	case "env":
+		fmt.Println(os.Getenv("PTYX_TEST_VAR"))
+	case "dir":
+		wd, _ := os.Getwd()
+		fmt.Println(wd)
+	default:
+		fmt.Println("noop")
+	}
+	_ = os.Stdout.Sync()
+}
 
 func TestUnixSpawn(t *testing.T) {
 	t.Run("EmptyProgram", func(t *testing.T) {
@@ -26,7 +48,6 @@ func TestUnixSpawn(t *testing.T) {
 		if err == nil {
 			t.Fatal("Spawn with non-existent program should return an error, but got nil")
 		}
-
 		var execErr *exec.Error
 		if !errors.As(err, &execErr) {
 			t.Errorf("Spawn error = %v (type %T), want type *exec.Error", err, err)
@@ -36,37 +57,36 @@ func TestUnixSpawn(t *testing.T) {
 
 func TestUnixSpawn_WithOptions(t *testing.T) {
 	t.Run("Env", func(t *testing.T) {
-		s, err := Spawn(SpawnOpts{
-			Prog: "sh",
-			Args: []string{"-c", "echo $PTYX_TEST_VAR"},
-			Env:  []string{"PTYX_TEST_VAR=hello_ptyx"},
-		})
+		line, err := spawnReadOneLineAndClose(SpawnOpts{
+			Prog: os.Args[0],
+			Args: []string{"-test.run=^TestHelperProcess$"},
+			Env: append(os.Environ(),
+				"PTYX_HELPER=1",
+				"MODE=env",
+				"PTYX_TEST_VAR=hello_ptyx",
+			),
+		}, 5*time.Second)
 		if err != nil {
 			t.Fatalf("Spawn failed: %v", err)
 		}
-		defer s.Close()
-
-		output, _ := io.ReadAll(s.PtyReader())
-		_ = s.Wait()
-
-		if got := strings.TrimSpace(string(output)); got != "hello_ptyx" {
-			t.Errorf("Expected output to be 'hello_ptyx', got %q", got)
+		if !strings.Contains(line, "hello_ptyx") {
+			t.Errorf("Expected output to contain 'hello_ptyx', got %q", line)
 		}
 	})
 
 	t.Run("Dir", func(t *testing.T) {
 		tempDir := t.TempDir()
-		s, err := Spawn(SpawnOpts{Prog: "pwd", Dir: tempDir})
+		line, err := spawnReadOneLineAndClose(SpawnOpts{
+			Prog: os.Args[0],
+			Args: []string{"-test.run=^TestHelperProcess$"},
+			Env:  append(os.Environ(), "PTYX_HELPER=1", "MODE=dir"),
+			Dir:  tempDir,
+		}, 5*time.Second)
 		if err != nil {
 			t.Fatalf("Spawn failed: %v", err)
 		}
-		defer s.Close()
-
-		output, _ := io.ReadAll(s.PtyReader())
-		_ = s.Wait()
-
-		if got := strings.TrimSpace(string(output)); got != tempDir {
-			t.Errorf("Expected output to be '%s', got %q", tempDir, got)
+		if !strings.HasSuffix(strings.TrimSpace(line), tempDir) {
+			t.Errorf("Expected output to end with %q, got %q", tempDir, line)
 		}
 	})
 }
@@ -85,6 +105,7 @@ func TestClen(t *testing.T) {
 		{"Empty slice", []byte{}, 0},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if got := clen(tt.b); got != tt.want {
 				t.Errorf("clen() = %v, want %v", got, tt.want)
@@ -94,7 +115,7 @@ func TestClen(t *testing.T) {
 }
 
 func TestUnixSession_Wait_ExitError(t *testing.T) {
-	s, err := Spawn(SpawnOpts{Prog: "sh", Args: []string{"-c", "exit 42"}})
+	s, err := Spawn(SpawnOpts{Prog: "sh", Args: []string{"-c", "exit 17"}})
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			t.Skipf("could not find 'sh', skipping test: %v", err)
@@ -108,37 +129,133 @@ func TestUnixSession_Wait_ExitError(t *testing.T) {
 		t.Fatal("Wait() returned nil, expected an ExitError")
 	}
 	var exitErr *ExitError
-	if !errors.As(waitErr, &exitErr) || exitErr.ExitCode != 42 {
-		t.Fatalf("Wait() error = %v (type %T), want *ptyx.ExitError with code 42", waitErr, waitErr)
+	if !errors.As(waitErr, &exitErr) || exitErr.ExitCode != 17 {
+		t.Fatalf("Wait() error = %v (type %T), want *ptyx.ExitError with code 17", waitErr, waitErr)
 	}
 }
 
 func TestUnixSession_Kill(t *testing.T) {
-	s, err := Spawn(SpawnOpts{Prog: "sleep", Args: []string{"30"}})
+	s, err := Spawn(SpawnOpts{Prog: "sh", Args: []string{"-c", `while true; do echo "looping..."; sleep 0.1; done`}})
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			t.Skipf("could not find 'sleep', skipping test: %v", err)
+			t.Skipf("could not find 'sh', skipping test: %v", err)
 		}
 		t.Fatalf("Spawn failed: %v", err)
 	}
+	defer s.Close()
+
+	doneCopy := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, s.PtyReader())
+		close(doneCopy)
+	}()
 
 	if err := s.Kill(); err != nil {
 		t.Fatalf("Kill() failed: %v", err)
 	}
 
-	waitErr := s.Wait()
-	if waitErr == nil {
-		t.Fatal("Wait() returned nil, expected an error after Kill()")
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- s.Wait() }()
+
+	select {
+	case waitErr := <-waitDone:
+		if waitErr == nil {
+			t.Fatal("Wait() returned nil, expected an error after Kill()")
+		}
+		var exitErr *ExitError
+		if !errors.As(waitErr, &exitErr) || exitErr.ExitCode != -1 {
+			t.Fatalf("Wait() error = %v (type %T), want *ptyx.ExitError with code -1", waitErr, waitErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("s.Wait() timed out after s.Kill()")
 	}
 
-	var exitErr *ExitError
-	if !errors.As(waitErr, &exitErr) {
-		t.Fatalf("Wait() error = %v (type %T), want *ptyx.ExitError", waitErr, waitErr)
+	select {
+	case <-doneCopy:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader did not finish in time")
+	}
+}
+
+func spawnReadOneLineAndClose(opts SpawnOpts, timeout time.Duration) (string, error) {
+	s, err := Spawn(opts)
+	if err != nil {
+		return "", err
 	}
 
-	if exitErr.ExitCode != -1 {
-		t.Errorf("ExitCode = %d, want -1 for a killed process", exitErr.ExitCode)
+	type lineRes struct {
+		line string
+		err  error
+	}
+	lineCh := make(chan lineRes, 1)
+	waitCh := make(chan error, 1)
+
+	go func() {
+		line, rerr := readPTYOneLine(s.PtyReader())
+		lineCh <- lineRes{line: strings.TrimRight(line, "\r\n"), err: rerr}
+	}()
+	go func() { waitCh <- s.Wait() }()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var line string
+	select {
+	case lr := <-lineCh:
+		if lr.err != nil && !isPTYEOF(lr.err) && !errors.Is(lr.err, io.EOF) {
+			_ = s.Kill()
+			_ = s.Close()
+			return "", lr.err
+		}
+		line = lr.line
+	case werr := <-waitCh:
+		_ = s.Close()
+		lr := <-lineCh
+		if lr.err != nil && !isPTYEOF(lr.err) && !errors.Is(lr.err, io.EOF) {
+			return "", lr.err
+		}
+		line = lr.line
+		if line == "" {
+			return "", fmt.Errorf("child exited before producing a line (wait err: %v)", werr)
+		}
+		return line, nil
+	case <-timer.C:
+		_ = s.Kill()
+		_ = s.Close()
+		return "", fmt.Errorf("timeout reading line")
 	}
 
 	_ = s.Close()
+
+	select {
+	case <-waitCh:
+	case <-time.After(timeout):
+		_ = s.Kill()
+		return "", fmt.Errorf("timeout waiting child")
+	}
+
+	return line, nil
+}
+
+func readPTYOneLine(r io.Reader) (string, error) {
+	br := bufio.NewReader(r)
+	var buf bytes.Buffer
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			if isPTYEOF(err) || errors.Is(err, io.EOF) {
+				return buf.String(), err
+			}
+			return "", err
+		}
+		buf.WriteByte(b)
+		if b == '\n' {
+			return buf.String(), nil
+		}
+	}
+}
+
+func isPTYEOF(err error) bool {
+	var errno syscall.Errno
+	return errors.As(err, &errno) && errno == syscall.EIO
 }

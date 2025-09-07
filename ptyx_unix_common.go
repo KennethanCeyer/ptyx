@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || netbsd || openbsd
+//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
 package ptyx
 
@@ -33,7 +33,7 @@ func Spawn(opts SpawnOpts) (sess Session, err error) {
 	}()
 
 	cmd := exec.Command(opts.Prog, opts.Args...)
-	cmd.Env = append(os.Environ(), opts.Env...)
+	cmd.Env = opts.Env
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir
 	}
@@ -64,10 +64,16 @@ func (s *unixSession) Wait() error {
 }
 func (s *unixSession) Kill() error { return s.cmd.Process.Kill() }
 func (s *unixSession) Close() error {
-	_ = s.Kill()
+	// Closing the master PTY file will send a SIGHUP to the controlling process
+	// of the pseudo-terminal, which should cause it to exit.
 	return s.master.Close()
 }
 func (s *unixSession) Pid() int { return s.cmd.Process.Pid }
+
+// Therefore, this call is equivalent to Close().
+func (s *unixSession) CloseStdin() error {
+	return s.master.Close()
+}
 
 func setWinsize(fd int, cols, rows int) error {
 	ws := &unix.Winsize{Col: uint16(cols), Row: uint16(rows)}
@@ -83,8 +89,8 @@ func clen(b []byte) int {
 	return len(b)
 }
 
-func ioctl(fd, cmd, ptr uintptr) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, cmd, ptr)
+func ioctl(fd, op, arg uintptr) error {
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, op, arg)
 	if errno != 0 {
 		return errno
 	}

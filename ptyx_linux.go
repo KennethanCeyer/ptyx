@@ -1,4 +1,4 @@
-//go:build linux && !android
+//go:build linux
 
 package ptyx
 
@@ -16,22 +16,24 @@ func openPTY() (*os.File, *os.File, error) {
 		return nil, nil, err
 	}
 
-	ptmxN, err := unix.IoctlGetInt(masterFd, unix.TIOCGPTN)
-	if err != nil {
+	var ptn uint32
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(masterFd), unix.TIOCGPTN, uintptr(unsafe.Pointer(&ptn)))
+	if errno != 0 {
+		err = errno
 		_ = unix.Close(masterFd)
 		return nil, nil, fmt.Errorf("ioctl(TIOCGPTN): %w", err)
 	}
+	slaveName := fmt.Sprintf("/dev/pts/%d", ptn)
 
-	val := 0
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(masterFd), unix.TIOCSPTLCK, uintptr(unsafe.Pointer(&val)))
+	var p int
+	_, _, errno = unix.Syscall(unix.SYS_IOCTL, uintptr(masterFd), unix.TIOCSPTLCK, uintptr(unsafe.Pointer(&p)))
 	if errno != 0 {
 		err = errno
 		_ = unix.Close(masterFd)
 		return nil, nil, fmt.Errorf("ioctl(TIOCSPTLCK): %w", err)
 	}
 
-	slavePath := fmt.Sprintf("/dev/pts/%d", ptmxN)
-	slaveFd, err := unix.Open(slavePath, unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	slaveFd, err := unix.Open(slaveName, unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		_ = unix.Close(masterFd)
 		return nil, nil, err

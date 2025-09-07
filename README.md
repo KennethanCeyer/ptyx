@@ -20,10 +20,10 @@
 
 ## Features
 
-- **Cross-Platform Sessions**: Spawn child processes within a PTY on Unix-like systems (Linux, macOS, BSD) and with ConPTY on Windows.
-- **Terminal Control**: Manage the local terminal with features like raw mode, size detection, and resize notifications.
-- **I/O Multiplexing**: A simple `Mux` utility to bridge the gap between the local console and the PTY session.
-- **Zero Dependencies**: No external dependencies beyond the official `golang.org/x/sys` and `golang.org/x/term` packages.
+- **Cross-Platform PTY**: Simple API to spawn processes in a pseudo-terminal on macOS, Linux, BSDs (using `ptmx`) and on Windows (using `ConPTY`).
+- **TTY Control**: Functions to control the local terminal, including setting raw mode, getting terminal size, and receiving resize notifications.
+- **I/O Bridge**: A `Mux` utility to easily connect the local terminal's stdin/stdout to the PTY session.
+- **Zero External Dependencies**: Relies only on the standard library and the official `golang.org/x` packages (`sys`, `term`).
 
 ---
 
@@ -73,77 +73,80 @@ go run ./cmd/run -- bash -lc "echo hi; read -p 'press:' x; echo done"
 package main
 
 import (
-  "context"
-  "fmt"
-  "io"
-  "log"
-  "os"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"runtime"
 
-  "github.com/KennethanCeyer/ptyx"
+	"github.com/KennethanCeyer/ptyx"
 )
 
-func runShell() {
-  c, err := ptyx.NewConsole()
-  if err != nil {
-    log.Fatalf("failed to create console: %v", err)
-  }
-  defer c.Close()
-  c.EnableVT()
+func main() {
+	c, err := ptyx.NewConsole()
+	if err != nil {
+		log.Fatalf("failed to create console: %v", err)
+	}
+	defer c.Close()
+	c.EnableVT()
 
-  st, err := c.MakeRaw()
-  if err != nil {
-    // On Windows, MakeRaw can fail if not in a standard terminal.
-    // We can proceed without it, but the experience will be degraded.
-    log.Printf("failed to enter raw mode: %v", err)
-  } else {
-    defer c.Restore(st)
-  }
+	st, err := c.MakeRaw()
+	if err != nil {
+		log.Printf("failed to enter raw mode (this is expected when not in a TTY): %v", err)
+	} else {
+		defer c.Restore(st)
+	}
 
-  w, h := c.Size()
-  s, err := ptyx.Spawn(ptyx.SpawnOpts{Prog: "/bin/sh", Cols: w, Rows: h})
-  if err != nil {
-    log.Fatalf("failed to spawn: %v", err)
-  }
-  defer s.Close()
+	w, h := c.Size()
+	shell := "sh"
+	if runtime.GOOS == "windows" {
+		shell = "powershell.exe"
+	}
+	s, err := ptyx.Spawn(ptyx.SpawnOpts{Prog: shell, Cols: w, Rows: h})
+	if err != nil {
+		log.Fatalf("failed to spawn: %v", err)
+	}
+	defer s.Close()
 
-  m := ptyx.NewMux()
-  if err := m.Start(c, s); err != nil {
-    log.Fatalf("failed to start mux: %v", err)
-  }
-  defer m.Stop()
+	m := ptyx.NewMux()
+	if err := m.Start(c, s); err != nil {
+		log.Fatalf("failed to start mux: %v", err)
+	}
+	defer m.Stop()
 
-  go func() {
-    for range c.OnResize() {
-      if err := s.Resize(c.Size()); err != nil {
-        log.Printf("failed to resize: %v", err)
-      }
-    }
-  }()
+	go func() {
+		for range c.OnResize() {
+			if err := s.Resize(c.Size()); err != nil {
+				log.Printf("failed to resize: %v", err)
+			}
+		}
+	}()
 
-  if err := s.Wait(); err != nil {
-    if exitErr, ok := err.(*ptyx.ExitError); ok {
-      fmt.Printf("Process exited with code %d\n", exitErr.ExitCode)
-    } else {
-      log.Fatalf("wait failed: %v", err)
-    }
-  }
+	if err := s.Wait(); err != nil {
+		if exitErr, ok := err.(*ptyx.ExitError); ok {
+			fmt.Printf("\nProcess exited with code %d\n", exitErr.ExitCode)
+		} else {
+			log.Fatalf("\nwait failed: %v", err)
+		}
+	}
 }
 ```
 
 ### Run a program in PTY
 
 ```go
-s, _ := ptyx.Spawn(ptyx.SpawnOpts{
-  Prog: "bash",
-  Args: []string{"-lc", "htop || top"},
-  Cols: 120, Rows: 32,
-})
+s, err := ptyx.Spawn(ptyx.SpawnOpts{Prog: "ping", Args: []string{"8.8.8.8"}})
+if err != nil {
+	log.Fatalf("spawn failed: %v", err)
+}
 defer s.Close()
 
 go io.Copy(os.Stdout, s.PtyReader())
 go io.Copy(s.PtyWriter(), os.Stdin)
 
-_ = s.Wait()
+if err := s.Wait(); err != nil {
+	log.Printf("process wait failed: %v", err)
+}
 ```
 
 ### API References
@@ -155,6 +158,10 @@ type Console interface {
   Restore(RawState) error
   EnableVT()
   OnResize() <-chan struct{}
+  In() io.Reader
+  Out() io.Writer
+  Err() io.Writer
+  Close() error
 }
 
 type Session interface {
@@ -165,6 +172,12 @@ type Session interface {
   Kill() error
   Close() error
   Pid() int
+  CloseStdin() error
+}
+
+type Mux interface {
+  Start(c Console, s Session) error
+  Stop() error
 }
 
 type SpawnOpts struct {
@@ -175,6 +188,14 @@ type SpawnOpts struct {
   Cols int
   Rows int
 }
+
+type ExitError struct {
+  ExitCode int
+}
+
+// RawState is an opaque type that represents the terminal's state,
+// returned by MakeRaw() and passed to Restore().
+type RawState interface{}
 ```
 
 ## Notes

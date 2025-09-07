@@ -29,6 +29,7 @@ type Session interface {
 	Kill() error
 	Close() error
 	Pid() int
+	CloseStdin() error
 }
 
 type SpawnOpts struct {
