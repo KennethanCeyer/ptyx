@@ -8,17 +8,22 @@ import (
 	"os"
 )
 
+var (
+	newConsoleFunc = NewConsole
+	spawnFunc      = Spawn
+	newMuxFunc     = NewMux
+)
+
 func Run(ctx context.Context, opts SpawnOpts) error {
 	spawnCtx, spawnCancel := context.WithCancel(context.Background())
 	defer spawnCancel()
 
 	go func() { <-ctx.Done(); spawnCancel() }()
 
-	s, err := Spawn(spawnCtx, opts)
+	s, err := spawnFunc(spawnCtx, opts)
 	if err != nil {
 		return err
 	}
-	defer s.Close()
 
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- s.Wait() }()
@@ -29,22 +34,22 @@ func Run(ctx context.Context, opts SpawnOpts) error {
 		<-waitCh
 		return ctx.Err()
 	case err := <-waitCh:
+		_ = s.Close()
 		return err
 	}
 }
 
 func RunInteractive(ctx context.Context, opts SpawnOpts) error {
-	c, err := NewConsole()
+	c, err := newConsoleFunc()
 	if err != nil {
 		if !IsErrNotAConsole(err) {
 			return fmt.Errorf("failed to create console: %w", err)
 		}
 
-		s, spawnErr := Spawn(ctx, opts)
+		s, spawnErr := spawnFunc(ctx, opts)
 		if spawnErr != nil {
 			return fmt.Errorf("spawn failed: %w", spawnErr)
 		}
-		defer s.Close()
 
 		inDone := make(chan struct{})
 		outDone := make(chan struct{})
@@ -68,6 +73,7 @@ func RunInteractive(ctx context.Context, opts SpawnOpts) error {
 			<-outDone
 			return ctx.Err()
 		case err := <-waitCh:
+			_ = s.Close()
 			<-inDone
 			<-outDone
 
@@ -87,13 +93,13 @@ func RunInteractive(ctx context.Context, opts SpawnOpts) error {
 	w, h := c.Size()
 	opts.Cols, opts.Rows = w, h
 
-	s, err := Spawn(ctx, opts)
+	s, err := spawnFunc(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("spawn failed: %w", err)
 	}
 	defer s.Close()
 
-	m := NewMux()
+	m := newMuxFunc()
 	if err := m.Start(c, s); err != nil {
 		return fmt.Errorf("mux start failed: %w", err)
 	}

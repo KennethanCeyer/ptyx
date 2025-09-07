@@ -12,8 +12,7 @@ func newPlatformTestConsole(t *testing.T) (Console, func()) {
 	if err != nil {
 		t.Fatalf("failed to create pipe: %v", err)
 	}
-	c := &console{in: r, out: w, err: w}
-	c.outTTY = true
+	c := &console{in: r, out: w, err: w, outTTY: true, errTTY: true}
 	c.initResizeWatcher()
 	return c, func() { c.Close(); r.Close(); w.Close() }
 }

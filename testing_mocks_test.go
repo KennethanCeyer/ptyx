@@ -37,6 +37,8 @@ type mockSession struct {
 	ptyIn  *bytes.Buffer
 	ptyOut io.Reader
 	closeStdinFunc func() error
+	waitFunc       func() error
+	closeFunc      func() error
 }
 
 func newMockSession(output string) *mockSession {
@@ -49,9 +51,19 @@ func newMockSession(output string) *mockSession {
 func (m *mockSession) PtyReader() io.Reader      { return m.ptyOut }
 func (m *mockSession) PtyWriter() io.Writer      { return m.ptyIn }
 func (m *mockSession) Resize(cols, rows int) error { return nil }
-func (m *mockSession) Wait() error                 { return nil }
+func (m *mockSession) Wait() error {
+	if m.waitFunc != nil {
+		return m.waitFunc()
+	}
+	return nil
+}
 func (m *mockSession) Kill() error                 { return nil }
-func (m *mockSession) Close() error                { return nil }
+func (m *mockSession) Close() error {
+	if m.closeFunc != nil {
+		return m.closeFunc()
+	}
+	return nil
+}
 func (m *mockSession) Pid() int                    { return 1234 }
 func (m *mockSession) CloseStdin() error {
 	if m.closeStdinFunc != nil {
@@ -59,3 +71,11 @@ func (m *mockSession) CloseStdin() error {
 	}
 	return nil
 }
+
+type mockMux struct {
+	startErr error
+	stopErr  error
+}
+
+func (m *mockMux) Start(c Console, s Session) error { return m.startErr }
+func (m *mockMux) Stop() error                      { return m.stopErr }

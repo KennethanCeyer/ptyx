@@ -10,13 +10,21 @@ import (
 )
 
 func newPlatformTestConsole(t *testing.T) (Console, func()) {
-	r, w, err := os.Pipe()
+	master, slave, err := openPTY()
 	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
+		t.Fatalf("failed to open pty: %v", err)
 	}
-	c := &console{in: r, out: w, err: w, outTTY: true}
+	if err := setWinsize(int(master.Fd()), 80, 24); err != nil {
+		t.Logf("failed to set pty size, continuing anyway: %v", err)
+	}
+
+	c := &console{in: slave, out: slave, err: slave, outTTY: true, errTTY: true}
 	c.initResizeWatcher()
-	return c, func() { c.Close(); r.Close(); w.Close() }
+	return c, func() {
+		c.Close()
+		master.Close()
+		slave.Close()
+	}
 }
 
 func TestUnixConsole_ResizeSignal(t *testing.T) {
