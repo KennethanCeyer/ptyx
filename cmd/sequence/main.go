@@ -120,7 +120,7 @@ func runCommandSequence(ctx context.Context, s ptyx.Session) error {
 		}
 	} else {
 		initialCmds = []string{"stty -echo"}
-		loadingCmd = "echo Loading...; sleep 3"
+		loadingCmd = "echo Loading...; sleep 5"
 		commands = []string{
 			"pwd",
 			loadingCmd,
