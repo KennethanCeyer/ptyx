@@ -93,22 +93,16 @@ func runCommandSequence(ctx context.Context, s ptyx.Session) error {
 	var initialCmds []string
 	var commands []string
 	var loadingCmd string
+	sleepDuration := "3"
 	if runtime.GOOS == "windows" {
 		initialCmds = []string{"echo off"}
-		sleepDuration := "3"
 		loadingCmd = fmt.Sprintf("echo Loading... & powershell.exe -Command \"Start-Sleep -Seconds %s\"", sleepDuration)
-		commands = []string{
-			"cd",
-			loadingCmd,
-		}
 	} else {
-		initialCmds = []string{"stty -echo"}
-		sleepDuration := "3"
+		initialCmds = []string{}
 		loadingCmd = fmt.Sprintf("echo Loading...; sleep %s", sleepDuration)
-		commands = []string{
-			"pwd",
-			loadingCmd,
-		}
+	}
+	commands = []string{
+		loadingCmd,
 	}
 
 	separator := "&&"
