@@ -113,14 +113,14 @@ func runCommandSequence(ctx context.Context, s ptyx.Session) error {
 	var loadingCmd string
 	if runtime.GOOS == "windows" {
 		initialCmds = []string{"@echo off"}
-		loadingCmd = "echo Loading... & ping -n 2 127.0.0.1 > nul"
+		loadingCmd = "echo Loading... & ping -n 4 127.0.0.1 > nul"
 		commands = []string{
 			"cd",
 			loadingCmd,
 		}
 	} else {
 		initialCmds = []string{"stty -echo"}
-		loadingCmd = "echo Loading...; sleep 1"
+		loadingCmd = "echo Loading...; sleep 3"
 		commands = []string{
 			"pwd",
 			loadingCmd,
@@ -130,6 +130,9 @@ func runCommandSequence(ctx context.Context, s ptyx.Session) error {
 	sequence := append(initialCmds, commands...)
 	for _, cmd := range sequence {
 		if err := run(cmd); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				s.Kill()
+			}
 			return s.Wait()
 		}
 	}
