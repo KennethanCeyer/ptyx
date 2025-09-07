@@ -130,10 +130,12 @@ func runCommandSequence(ctx context.Context, s ptyx.Session) error {
 	sequence := append(initialCmds, commands...)
 	for _, cmd := range sequence {
 		if err := run(cmd); err != nil {
+			originalErr := err
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				s.Kill()
 			}
-			return s.Wait()
+			_ = s.Wait()
+			return originalErr
 		}
 	}
 
