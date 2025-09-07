@@ -25,7 +25,21 @@
 - **I/O Bridge**: A `Mux` utility to easily connect the local terminal's stdin/stdout to the PTY session.
 - **Zero External Dependencies**: Relies only on the standard library and the official `golang.org/x` packages (`sys`, `term`).
 
----
+## How It Works
+
+`ptyx` acts as a bridge between a user's terminal and a pseudo-terminal (PTY), enabling interactive command-line applications. It abstracts away the platform-specific details of PTY/TTY management.
+
+![ptyx architecture diagram](docs/diagram.svg)
+
+The architecture consists of three main components:
+
+- **User Interfaces (Console)**: This represents the user's actual terminal. `ptyx` captures input from its `stdin` (`Pipe In`) and writes output to its `stdout` (`Pipe Out`).
+
+- **Interface Handlers (ptyx)**: The core of the library, which manages the communication pipes. It ensures that data flows smoothly between the user's console and the underlying pseudo-terminal.
+
+- **Pseudoterminal (Backend)**: The OS-level PTY implementation that runs the child process.
+  - On Windows, this is the **ConPTY** API.
+  - On Unix-like systems (macOS, Linux), this is a traditional **`/dev/ptmx`** device.
 
 ## Installation
 
