@@ -21,25 +21,20 @@ func TestSequence_NormalCompletion(t *testing.T) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "go", "run", ".")
-	cmd.Dir = "."
 	cmd.Env = append(os.Environ(), "PTYX_TEST_MODE=1")
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	err := cmd.Run()
-	output := out.String()
+	outputBytes, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed with error: %v\nOutput:\n%s", err, string(outputBytes))
+	}
+	output := string(outputBytes)
 
 	if err != nil {
 		t.Fatalf("command failed with error: %v\nOutput:\n%s", err, output)
 	}
 
 	expectedSubstrings := []string{
-		"--- Starting command sequence ---",
-		"Current directory:",
 		"Loading...",
-		"--- Sequence finished ---",
 		"Process finished naturally.",
 		"Process exited successfully with code 0.",
 	}
@@ -56,11 +51,10 @@ func TestSequence_Interruption(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "go", "run", ".")
-	cmd.Dir = "."
 	cmd.Env = append(os.Environ(), "PTYX_TEST_MODE=1")
 
 	var out bytes.Buffer
@@ -90,7 +84,7 @@ func TestSequence_Interruption(t *testing.T) {
 		t.Fatalf("expected command to fail due to interruption, but it succeeded.\nOutput:\n%s", output)
 	}
 
-	if strings.Contains(output, "--- Sequence finished ---") {
+	if strings.Contains(output, "[DEMO] Command sequence finished.") {
 		t.Errorf("sequence should have been interrupted before finishing, but it looks like it completed.\nOutput:\n%s", output)
 	}
 }

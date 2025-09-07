@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +21,7 @@ func main() {
 
 	shell := "sh"
 	if runtime.GOOS == "windows" {
-		shell = "powershell.exe"
+		shell = "cmd.exe"
 	}
 
 	fmt.Printf("[DEMO] Spawning shell '%s' in a PTY...\n", shell)
@@ -31,70 +31,16 @@ func main() {
 	}
 	defer s.Close()
 
-	readyCh := make(chan struct{}, 1)
-	cmdCh := make(chan string)
-	waitCh := make(chan error, 1)
-	const commandDoneMarker = "COMMAND_DONE_MARKER_v1"
-
-	go func() {
-		var buf [4096]byte
-		var readData bytes.Buffer
-		for {
-			n, err := s.PtyReader().Read(buf[:])
-			if n > 0 {
-				os.Stdout.Write(buf[:n])
-				readData.Write(buf[:n])
-
-				for bytes.Contains(readData.Bytes(), []byte(commandDoneMarker)) {
-					idx := bytes.Index(readData.Bytes(), []byte(commandDoneMarker))
-
-					select {
-					case readyCh <- struct{}{}:
-					default:
-					}
-					readData.Next(idx + len(commandDoneMarker))
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	go func() {
-		waitCh <- s.Wait()
-	}()
-
-	go func() {
-		for cmd := range cmdCh {
-			if _, err := fmt.Fprintf(s.PtyWriter(), "%s\r\n", cmd); err != nil {
-				log.Printf("Failed to write to PTY: %v", err)
-				return
-			}
-		}
-		fmt.Fprintln(os.Stderr, "\n[DEMO] Command channel closed.")
-	}()
-
 	if os.Getenv("PTYX_TEST_MODE") == "" {
 		go func() {
-			time.Sleep(150 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 			fmt.Fprintln(os.Stderr, "\n[DEMO] Automatically cancelling sequence...")
 			cancel()
 		}()
 	}
 
-	go runCommandSequence(ctx, cmdCh, readyCh, commandDoneMarker)
-
-	var waitErr error
 	fmt.Println("[DEMO] Running command sequence...")
-	select {
-	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, "\n[DEMO] Cancellation detected. Terminating process...")
-		waitErr = <-waitCh
-
-	case waitErr = <-waitCh:
-		fmt.Println("\n[DEMO] Process finished naturally.")
-	}
+	waitErr := runCommandSequence(ctx, s)
 
 	fmt.Println("\n--- Wait Result ---")
 	if waitErr != nil {
@@ -108,84 +54,90 @@ func main() {
 				}
 			}
 		}
+		if ctx.Err() != nil {
+			fmt.Println("[DEMO] Process was interrupted.")
+		}
+		os.Exit(1)
 	} else {
+		fmt.Println("\n[DEMO] Process finished naturally.")
 		fmt.Println("Process exited successfully with code 0.")
 	}
 }
 
-func runCommandSequence(ctx context.Context, cmdCh chan<- string, readyCh <-chan struct{}, marker string) {
-	defer close(cmdCh)
+func runCommandSequence(ctx context.Context, s ptyx.Session) error {
+	const marker = "PTYX_CMD_DONE"
+	cmdDone := make(chan struct{}, 1)
 
-	sendCommand := func(cmd string) bool {
-		fmt.Fprintf(os.Stderr, "\n[DEMO] Sending command: %s\n", cmd)
-		fullCmd := fmt.Sprintf("%s; echo %s", cmd, marker)
-		if cmd == "" {
-			fullCmd = fmt.Sprintf("echo %s", marker)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, err := s.PtyReader().Read(buf)
+			if n > 0 {
+				if _, writeErr := os.Stdout.Write(buf[:n]); writeErr != nil {
+					break
+				}
+
+				if strings.Contains(string(buf[:n]), marker) {
+					select {
+					case cmdDone <- struct{}{}:
+					default:
+					}
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	run := func(cmd string) error {
+		separator := ";"
+		if runtime.GOOS == "windows" {
+			separator = "&"
 		}
 
+		fullCmd := fmt.Sprintf("%s %s echo %s", cmd, separator, marker)
+		if _, err := fmt.Fprintf(s.PtyWriter(), "%s\r\n", fullCmd); err != nil {
+			return err
+		}
 		select {
-		case cmdCh <- fullCmd:
-			return true
 		case <-ctx.Done():
-			return false
+			return ctx.Err()
+		case <-cmdDone:
+			return nil
 		}
 	}
 
-	waitReady := func() bool {
-		select {
-		case <-readyCh:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-
+	var initialCmds []string
+	var commands []string
 	var loadingCmd string
 	if runtime.GOOS == "windows" {
-		loadingCmd = "Write-Host 'Loading...'; for ($i=0; $i -le 25; $i++) { $p = '#' * $i; $r = ' ' * (25 - $i); $pct = $i * 4; Write-Host -NoNewline \"[$p$r] - $pct%`r\"; Start-Sleep -Milliseconds 100 }; echo ''"
-	} else {
-		loadingCmd = "echo 'Loading...'; i=0; while [ $i -le 25 ]; do printf '['; j=0; while [ $j -lt $i ]; do printf '#'; j=$((j+1)); done; j=0; while [ $j -lt $((25-i)) ]; do printf ' '; j=$((j+1)); done; printf '] - %s%%' $((i*4)); printf '\r'; sleep 0.1; i=$((i+1)); done; echo ''"
-	}
-
-	commands := []string{
-		"echo '--- Starting command sequence ---'",
-		"echo 'Current directory:'; pwd",
-		loadingCmd,
-		"echo '--- Sequence finished ---'",
-		"exit 0",
-	}
-
-	lastCmd := commands[len(commands)-1]
-	commands = commands[:len(commands)-1]
-
-	if runtime.GOOS != "windows" {
-		commands = append([]string{"stty -echo"}, commands...)
-	} else {
-		commands = append([]string{
-			"Set-PSReadlineOption -HistorySaveStyle SaveNothing",
-			"Remove-Module PSReadline",
-		}, commands...)
-	}
-
-	if !sendCommand(commands[0]) {
-		return
-	}
-
-	for _, cmd := range commands[1:] {
-		if !waitReady() {
-			return
+		initialCmds = []string{"@echo off"}
+		loadingCmd = "echo Loading... & ping -n 2 127.0.0.1 > nul"
+		commands = []string{
+			"cd",
+			loadingCmd,
 		}
-		if !sendCommand(cmd) {
-			return
+	} else {
+		initialCmds = []string{"stty -echo"}
+		loadingCmd = "echo Loading...; sleep 1"
+		commands = []string{
+			"pwd",
+			loadingCmd,
 		}
 	}
 
-	if !waitReady() {
-		return
+	sequence := append(initialCmds, commands...)
+	for _, cmd := range sequence {
+		if err := run(cmd); err != nil {
+			return s.Wait()
+		}
 	}
 
-	select {
-	case cmdCh <- lastCmd:
-	case <-ctx.Done():
+	if _, err := fmt.Fprintf(s.PtyWriter(), "exit 0\r\n"); err != nil {
+		return err
 	}
+
+	fmt.Fprintln(os.Stderr, "\n[DEMO] Command sequence finished.")
+	return s.Wait()
 }
