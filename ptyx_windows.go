@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf16"
 	"unsafe"
 
@@ -17,11 +18,14 @@ import (
 )
 
 type winSession struct {
-	con     *ConPty
-	pid     int
-	process windows.Handle
-	thread  windows.Handle
+	con      *ConPty
+	pid      int
+	process  windows.Handle
+	thread   windows.Handle
+	job      windows.Handle
+	killed   uint32
 	closeOnce sync.Once
+	conOnce   sync.Once
 }
 
 func buildCommandLine(prog string, args []string) string {
@@ -57,36 +61,44 @@ func Spawn(ctx context.Context, opts SpawnOpts) (Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	var spawnErr error
 	defer func() {
-		if err != nil {
+		if spawnErr != nil {
 			_ = con.Close()
 		}
 	}()
 
 	progPath, err := exec.LookPath(opts.Prog)
 	if err != nil {
+		spawnErr = err
 		return nil, err
 	}
 
 	cmdline := buildCommandLine(progPath, opts.Args)
+
 	siEx := new(windows.StartupInfoEx)
-	siEx.Flags = windows.STARTF_USESTDHANDLES
 	siEx.Cb = uint32(unsafe.Sizeof(*siEx))
+	siEx.Flags = windows.STARTF_USESTDHANDLES
 	siEx.ProcThreadAttributeList = con.attrList.List()
 
 	pi := new(windows.ProcessInformation)
-	flags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT)
+
+	flags := uint32(windows.CREATE_UNICODE_ENVIRONMENT |
+		windows.EXTENDED_STARTUPINFO_PRESENT |
+		windows.CREATE_NEW_PROCESS_GROUP)
 
 	pCmdline, err := windows.UTF16PtrFromString(cmdline)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert command line to UTF16: %w", err)
+		spawnErr = fmt.Errorf("failed to convert command line to UTF16: %w", err)
+		return nil, spawnErr
 	}
 
 	var pDir *uint16
 	if opts.Dir != "" {
 		pDir, err = windows.UTF16PtrFromString(opts.Dir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert directory to UTF16: %w", err)
+			spawnErr = fmt.Errorf("failed to convert directory to UTF16: %w", err)
+			return nil, spawnErr
 		}
 	}
 
@@ -102,7 +114,30 @@ func Spawn(ctx context.Context, opts SpawnOpts) (Session, error) {
 		pEnv = &envBlock[0]
 	}
 
-	err = windows.CreateProcess(
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		spawnErr = fmt.Errorf("CreateJobObject: %w", err)
+		return nil, spawnErr
+	}
+
+	ext := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+		},
+	}
+	_, err = windows.SetInformationJobObject(
+		job,
+		windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&ext)),
+		uint32(unsafe.Sizeof(ext)),
+	)
+	if err != nil {
+		windows.CloseHandle(job)
+		spawnErr = fmt.Errorf("SetInformationJobObject: %w", err)
+		return nil, spawnErr
+	}
+
+	if err = windows.CreateProcess(
 		nil,
 		pCmdline,
 		nil,
@@ -113,23 +148,57 @@ func Spawn(ctx context.Context, opts SpawnOpts) (Session, error) {
 		pDir,
 		&siEx.StartupInfo,
 		pi,
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create process: %w", err)
+	); err != nil {
+		windows.CloseHandle(job)
+		spawnErr = fmt.Errorf("failed to create process: %w", err)
+		return nil, spawnErr
 	}
 
-	go func() {
-		<-ctx.Done()
+	if err = windows.AssignProcessToJobObject(job, pi.Process); err != nil {
 		_ = windows.TerminateProcess(pi.Process, 1)
-	}()
+		_ = windows.CloseHandle(pi.Thread)
+		_ = windows.CloseHandle(pi.Process)
+		_ = windows.CloseHandle(job)
+		spawnErr = fmt.Errorf("AssignProcessToJobObject: %w", err)
+		return nil, spawnErr
+	}
 
-	return &winSession{
+	sess := &winSession{
 		con:     con,
 		pid:     int(pi.ProcessId),
 		process: pi.Process,
 		thread:  pi.Thread,
-	}, nil
+		job:     job,
+	}
+
+	closeCon := func() {
+		sess.conOnce.Do(func() {
+			if sess.con != nil {
+				_ = sess.con.Close()
+			}
+		})
+	}
+
+	go func() {
+		<-ctx.Done()
+		atomic.StoreUint32(&sess.killed, 1)
+		if sess.job != 0 {
+			windows.CloseHandle(sess.job)
+			sess.job = 0
+		}
+		_ = windows.TerminateProcess(pi.Process, 1)
+		st, _ := windows.WaitForSingleObject(pi.Process, 1500)
+		if st == uint32(windows.WAIT_TIMEOUT) {
+			closeCon()
+		}
+	}()
+
+	go func() {
+		_, _ = windows.WaitForSingleObject(pi.Process, windows.INFINITE)
+		closeCon()
+	}()
+
+	return sess, nil
 }
 
 func (s *winSession) PtyReader() io.Reader        { return s.con.outFile }
@@ -149,6 +218,12 @@ func (s *winSession) Wait() error {
 	if err := windows.GetExitCodeProcess(s.process, &code); err != nil {
 		return err
 	}
+	if atomic.LoadUint32(&s.killed) == 1 {
+		if code == 0 {
+			return &ExitError{ExitCode: 1, waitStatus: nil}
+		}
+		return &ExitError{ExitCode: int(code), waitStatus: nil}
+	}
 	if code == 0 {
 		return nil
 	}
@@ -156,20 +231,44 @@ func (s *winSession) Wait() error {
 }
 
 func (s *winSession) Kill() error {
-	return windows.TerminateProcess(s.process, 1)
+	atomic.StoreUint32(&s.killed, 1)
+	if s.job != 0 {
+		windows.CloseHandle(s.job)
+		s.job = 0
+	}
+	_ = windows.TerminateProcess(s.process, 1)
+	st, _ := windows.WaitForSingleObject(s.process, 1500)
+	if st == uint32(windows.WAIT_TIMEOUT) {
+		s.conOnce.Do(func() {
+			if s.con != nil {
+				_ = s.con.Close()
+			}
+		})
+	}
+	return nil
 }
 
 func (s *winSession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
-		if s.con != nil {
-			err = s.con.Close()
+		if s.job != 0 {
+			windows.CloseHandle(s.job)
+			s.job = 0
 		}
+		s.conOnce.Do(func() {
+			if s.con != nil {
+				if e := s.con.Close(); err == nil {
+					err = e
+				}
+			}
+		})
 		if s.process != 0 {
 			_ = windows.CloseHandle(s.process)
+			s.process = 0
 		}
 		if s.thread != 0 {
 			_ = windows.CloseHandle(s.thread)
+			s.thread = 0
 		}
 	})
 	return err
