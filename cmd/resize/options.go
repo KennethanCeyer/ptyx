@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 
 	"github.com/KennethanCeyer/ptyx"
 )
@@ -18,7 +19,7 @@ func ParseResizeOpts(argv []string) (ptyx.SpawnOpts, error) {
 	var cols, rows int
 	fs.IntVar(&cols, "cols", 0, "")
 	fs.IntVar(&rows, "rows", 0, "")
-	fs.SetOutput(nil)
+	fs.SetOutput(io.Discard)
 
 	if err := fs.Parse(argv); err != nil {
 		return ptyx.SpawnOpts{}, err

@@ -3,32 +3,10 @@
 package ptyx
 
 import (
-	"os"
 	"time"
 
 	"golang.org/x/sys/windows"
-	"golang.org/x/term"
 )
-
-type rawState struct{ st *term.State; fd int }
-type winWatcher struct{ C chan struct{}; stop chan struct{} }
-
-func NewConsole() (Console, error) {
-	c := &console{in: os.Stdin, out: os.Stdout, err: os.Stderr}
-	if c.out == nil {
-		return nil, ErrNotAConsole
-	}
-	fd := int(c.out.Fd())
-	if !term.IsTerminal(fd) {
-		return nil, ErrNotAConsole
-	}
-	c.outTTY = true
-	c.errTTY = term.IsTerminal(int(c.err.Fd()))
-
-	c.initWinWatcher()
-	c.EnableVT()
-	return c, nil
-}
 
 func (c *console) EnableVT() {
 	const ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
@@ -46,8 +24,8 @@ func (c *console) EnableVT() {
 	}
 }
 
-func (c *console) initWinWatcher() {
-	c.win = &winWatcher{C: make(chan struct{}, 1), stop: make(chan struct{})}
+func (c *console) initResizeWatcher() {
+	c.win = &resizeWatcher{C: make(chan struct{}, 1), stop: make(chan struct{})}
 	go func() {
 		t := time.NewTicker(200 * time.Millisecond)
 		defer t.Stop()
@@ -61,43 +39,4 @@ func (c *console) initWinWatcher() {
 			}
 		}
 	}()
-}
-
-func (c *console) Size() (int, int) {
-	w, h, err := term.GetSize(int(c.out.Fd()))
-	if err != nil { return 0, 0 }
-	return w, h
-}
-
-func (c *console) MakeRaw() (RawState, error) {
-	if c.in == nil {
-		return nil, ErrNotAConsole
-	}
-	fd := int(c.in.Fd())
-	if !term.IsTerminal(fd) {
-		return nil, ErrNotAConsole
-	}
-	st, err := term.MakeRaw(fd)
-	if err != nil { return nil, err }
-	r := &rawState{st: st, fd: fd}
-	c.raw = r
-	return r, nil
-}
-
-func (c *console) Restore(s RawState) error {
-	r, ok := s.(*rawState)
-	if !ok || r == nil || r.st == nil { return nil }
-
-	err := term.Restore(r.fd, r.st)
-	if err == nil { c.raw = nil }
-	return err
-}
-
-func (c *console) Close() error {
-	c.closeOnce.Do(func() {
-		if c.win != nil && c.win.stop != nil {
-			close(c.win.stop)
-		}
-	})
-	return nil
 }

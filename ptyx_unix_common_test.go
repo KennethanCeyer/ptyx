@@ -5,6 +5,7 @@ package ptyx
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +35,7 @@ func TestHelperProcess(t *testing.T) {
 
 func TestUnixSpawn(t *testing.T) {
 	t.Run("EmptyProgram", func(t *testing.T) {
-		_, err := Spawn(SpawnOpts{Prog: ""})
+		_, err := Spawn(context.Background(), SpawnOpts{Prog: ""})
 		if err == nil {
 			t.Fatal("Spawn with empty program should return an error, but got nil")
 		}
@@ -44,7 +45,7 @@ func TestUnixSpawn(t *testing.T) {
 	})
 
 	t.Run("NonExistentProgram", func(t *testing.T) {
-		_, err := Spawn(SpawnOpts{Prog: "a-program-that-does-not-exist-12345"})
+		_, err := Spawn(context.Background(), SpawnOpts{Prog: "a-program-that-does-not-exist-12345"})
 		if err == nil {
 			t.Fatal("Spawn with non-existent program should return an error, but got nil")
 		}
@@ -57,7 +58,7 @@ func TestUnixSpawn(t *testing.T) {
 
 func TestUnixSpawn_WithOptions(t *testing.T) {
 	t.Run("Env", func(t *testing.T) {
-		line, err := spawnReadOneLineAndClose(SpawnOpts{
+		line, err := spawnReadOneLineAndClose(context.Background(), SpawnOpts{
 			Prog: os.Args[0],
 			Args: []string{"-test.run=^TestHelperProcess$"},
 			Env: append(os.Environ(),
@@ -76,7 +77,7 @@ func TestUnixSpawn_WithOptions(t *testing.T) {
 
 	t.Run("Dir", func(t *testing.T) {
 		tempDir := t.TempDir()
-		line, err := spawnReadOneLineAndClose(SpawnOpts{
+		line, err := spawnReadOneLineAndClose(context.Background(), SpawnOpts{
 			Prog: os.Args[0],
 			Args: []string{"-test.run=^TestHelperProcess$"},
 			Env:  append(os.Environ(), "PTYX_HELPER=1", "MODE=dir"),
@@ -115,7 +116,7 @@ func TestClen(t *testing.T) {
 }
 
 func TestUnixSession_Wait_ExitError(t *testing.T) {
-	s, err := Spawn(SpawnOpts{Prog: "sh", Args: []string{"-c", "exit 17"}})
+	s, err := Spawn(context.Background(), SpawnOpts{Prog: "sh", Args: []string{"-c", "exit 17"}})
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			t.Skipf("could not find 'sh', skipping test: %v", err)
@@ -135,7 +136,7 @@ func TestUnixSession_Wait_ExitError(t *testing.T) {
 }
 
 func TestUnixSession_Kill(t *testing.T) {
-	s, err := Spawn(SpawnOpts{Prog: "sh", Args: []string{"-c", `while true; do echo "looping..."; sleep 0.1; done`}})
+	s, err := Spawn(context.Background(), SpawnOpts{Prog: "sh", Args: []string{"-c", `while true; do echo "looping..."; sleep 0.1; done`}})
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			t.Skipf("could not find 'sh', skipping test: %v", err)
@@ -177,8 +178,8 @@ func TestUnixSession_Kill(t *testing.T) {
 	}
 }
 
-func spawnReadOneLineAndClose(opts SpawnOpts, timeout time.Duration) (string, error) {
-	s, err := Spawn(opts)
+func spawnReadOneLineAndClose(ctx context.Context, opts SpawnOpts, timeout time.Duration) (string, error) {
+	s, err := Spawn(ctx, opts)
 	if err != nil {
 		return "", err
 	}
@@ -257,5 +258,5 @@ func readPTYOneLine(r io.Reader) (string, error) {
 
 func isPTYEOF(err error) bool {
 	var errno syscall.Errno
-	return errors.As(err, &errno) && errno == syscall.EIO
+	return errors.As(err, &errno) && (errno == syscall.EIO || errno == 0)
 }

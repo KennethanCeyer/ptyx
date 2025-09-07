@@ -3,6 +3,7 @@
 package ptyx
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -17,7 +18,7 @@ type unixSession struct {
 	master *os.File
 }
 
-func Spawn(opts SpawnOpts) (sess Session, err error) {
+func Spawn(ctx context.Context, opts SpawnOpts) (sess Session, err error) {
 	if opts.Prog == "" {
 		return nil, errors.New("ptyx: empty program")
 	}
@@ -32,7 +33,7 @@ func Spawn(opts SpawnOpts) (sess Session, err error) {
 		}
 	}()
 
-	cmd := exec.Command(opts.Prog, opts.Args...)
+	cmd := exec.CommandContext(ctx, opts.Prog, opts.Args...)
 	cmd.Env = opts.Env
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir
@@ -58,19 +59,17 @@ func (s *unixSession) Resize(cols, rows int) error { return setWinsize(int(s.mas
 func (s *unixSession) Wait() error {
 	err := s.cmd.Wait()
 	if exitErr, ok := err.(*exec.ExitError); ok {
-		return &ExitError{ExitCode: exitErr.ExitCode()}
+		return &ExitError{
+			ExitCode:   exitErr.ExitCode(),
+			waitStatus: exitErr.Sys(),
+		}
 	}
 	return err
 }
 func (s *unixSession) Kill() error { return s.cmd.Process.Kill() }
-func (s *unixSession) Close() error {
-	// Closing the master PTY file will send a SIGHUP to the controlling process
-	// of the pseudo-terminal, which should cause it to exit.
-	return s.master.Close()
-}
+func (s *unixSession) Close() error { return s.master.Close() }
 func (s *unixSession) Pid() int { return s.cmd.Process.Pid }
 
-// Therefore, this call is equivalent to Close().
 func (s *unixSession) CloseStdin() error {
 	return s.master.Close()
 }

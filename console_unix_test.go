@@ -3,17 +3,16 @@
 package ptyx
 
 import (
-	"errors"
+	"os"
 	"testing"
 )
 
 func newPlatformTestConsole(t *testing.T) (Console, func()) {
-	c, err := NewConsole()
+	r, w, err := os.Pipe()
 	if err != nil {
-		if errors.Is(err, ErrNotAConsole) {
-			t.Skipf("Not a console, skipping test: %v", err)
-		}
-		t.Fatalf("NewConsole() failed: %v", err)
+		t.Fatalf("failed to create pipe: %v", err)
 	}
-	return c, func() { c.Close() }
+	c := &console{in: r, out: w, err: w, outTTY: true}
+	c.initResizeWatcher()
+	return c, func() { c.Close(); r.Close(); w.Close() }
 }

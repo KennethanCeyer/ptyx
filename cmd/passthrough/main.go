@@ -33,6 +33,7 @@ func main() {
 		var exitErr *ptyx.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode != 0 {
 			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
 		}
 	}
 }

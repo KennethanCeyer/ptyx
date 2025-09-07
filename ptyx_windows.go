@@ -3,6 +3,7 @@
 package ptyx
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -51,7 +52,7 @@ func buildEnvBlock(env []string) []uint16 {
 	return utf16.Encode([]rune(blockStr))
 }
 
-func Spawn(opts SpawnOpts) (Session, error) {
+func Spawn(ctx context.Context, opts SpawnOpts) (Session, error) {
 	con, err := NewConPty(opts.Cols, opts.Rows, 0)
 	if err != nil {
 		return nil, err
@@ -118,6 +119,11 @@ func Spawn(opts SpawnOpts) (Session, error) {
 		return nil, fmt.Errorf("failed to create process: %w", err)
 	}
 
+	go func() {
+		<-ctx.Done()
+		_ = windows.TerminateProcess(pi.Process, 1)
+	}()
+
 	return &winSession{
 		con:     con,
 		pid:     int(pi.ProcessId),
@@ -146,7 +152,7 @@ func (s *winSession) Wait() error {
 	if code == 0 {
 		return nil
 	}
-	return &ExitError{ExitCode: int(code)}
+	return &ExitError{ExitCode: int(code), waitStatus: nil}
 }
 
 func (s *winSession) Kill() error {

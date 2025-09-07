@@ -15,7 +15,6 @@ func newTestConsole(t *testing.T) (Console, func()) {
 
 func TestNewConsole_NotAConsole(t *testing.T) {
 	if term.IsTerminal(int(os.Stdout.Fd())) {
-		t.Skip("cannot test non-TTY case because test is running in a TTY")
 	}
 
 	_, err := NewConsole()

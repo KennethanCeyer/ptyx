@@ -4,6 +4,7 @@ package ptyx
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -59,7 +60,6 @@ func TestBuildEnvBlock(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "Sanitize NUL character",
 			env:  []string{"A=B", "INVALID\x00KEY=val", "C=D"},
 			want: utf16.Encode([]rune("A=B\x00C=D\x00\x00")),
 		},
@@ -78,7 +78,7 @@ func TestBuildEnvBlock(t *testing.T) {
 
 func TestWindowsSpawn(t *testing.T) {
 	t.Run("NonExistentProgram", func(t *testing.T) {
-		_, err := Spawn(SpawnOpts{Prog: "a-program-that-does-not-exist-12345.exe"})
+		_, err := Spawn(context.Background(), SpawnOpts{Prog: "a-program-that-does-not-exist-12345.exe"})
 		if err == nil {
 			t.Fatal("Spawn with non-existent program should return an error, but got nil")
 		}
@@ -90,7 +90,7 @@ func TestWindowsSpawn(t *testing.T) {
 }
 
 func TestWinSession_Wait_ExitError(t *testing.T) {
-	s, err := Spawn(SpawnOpts{
+	s, err := Spawn(context.Background(), SpawnOpts{
 		Prog: os.Args[0],
 		Args: []string{"-test.run=^TestWinHelperProcess$"},
 		Env: append(os.Environ(),
@@ -114,7 +114,7 @@ func TestWinSession_Wait_ExitError(t *testing.T) {
 }
 
 func TestWinSession_Kill(t *testing.T) {
-	s, err := Spawn(SpawnOpts{
+	s, err := Spawn(context.Background(), SpawnOpts{
 		Prog: "powershell",
 		Args: []string{"-Command", "while ($true) { Write-Host 'looping...'; Start-Sleep -Milliseconds 100 }"},
 	})
@@ -151,7 +151,7 @@ func TestWinSession_Kill(t *testing.T) {
 
 func TestWindowsSpawn_WithOptions(t *testing.T) {
 	t.Run("Env", func(t *testing.T) {
-		line, err := spawnReadOneLineAndCloseWin(SpawnOpts{
+		line, err := spawnReadOneLineAndCloseWin(context.Background(), SpawnOpts{
 			Prog: os.Args[0],
 			Args: []string{"-test.run=^TestWinHelperProcess$"},
 			Env: append(os.Environ(),
@@ -170,7 +170,7 @@ func TestWindowsSpawn_WithOptions(t *testing.T) {
 
 	t.Run("Dir", func(t *testing.T) {
 		tempDir := t.TempDir()
-		line, err := spawnReadOneLineAndCloseWin(SpawnOpts{
+		line, err := spawnReadOneLineAndCloseWin(context.Background(), SpawnOpts{
 			Prog: os.Args[0],
 			Args: []string{"-test.run=^TestWinHelperProcess$"},
 			Env:  append(os.Environ(), "PTYX_HELPER=1", "MODE=dir"),
@@ -198,8 +198,8 @@ func stripANSI(s string) string {
 	return s
 }
 
-func spawnReadOneLineAndCloseWin(opts SpawnOpts, timeout time.Duration) (string, error) {
-	s, err := Spawn(opts)
+func spawnReadOneLineAndCloseWin(ctx context.Context, opts SpawnOpts, timeout time.Duration) (string, error) {
+	s, err := Spawn(ctx, opts)
 	if err != nil {
 		return "", err
 	}

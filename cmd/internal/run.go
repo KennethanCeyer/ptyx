@@ -3,6 +3,8 @@ package internal
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/KennethanCeyer/ptyx"
 )
@@ -10,7 +12,20 @@ import (
 func RunInPty(ctx context.Context, opts ptyx.SpawnOpts) error {
 	c, err := ptyx.NewConsole()
 	if err != nil {
-		return fmt.Errorf("failed to create console: %w", err)
+		if !ptyx.IsErrNotAConsole(err) {
+			return fmt.Errorf("failed to create console: %w", err)
+		}
+
+		s, spawnErr := ptyx.Spawn(ctx, opts)
+		if spawnErr != nil {
+			return fmt.Errorf("spawn failed: %w", spawnErr)
+		}
+		defer s.Close()
+
+		go io.Copy(s.PtyWriter(), os.Stdin)
+		go io.Copy(os.Stdout, s.PtyReader())
+
+		return s.Wait()
 	}
 	defer c.Close()
 	c.EnableVT()
@@ -23,7 +38,7 @@ func RunInPty(ctx context.Context, opts ptyx.SpawnOpts) error {
 	w, h := c.Size()
 	opts.Cols, opts.Rows = w, h
 
-	s, err := ptyx.Spawn(opts)
+	s, err := ptyx.Spawn(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("spawn failed: %w", err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -48,7 +49,7 @@ func main() {
 
 	fmt.Println("--- Spawning a program that waits for `Scanln` in a PTY. ---")
 
-	s, err := ptyx.Spawn(ptyx.SpawnOpts{
+	s, err := ptyx.Spawn(context.Background(), ptyx.SpawnOpts{
 		Prog: targetProg,
 		Args: targetArgs,
 		Dir:  projectRoot,

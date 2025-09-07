@@ -1,6 +1,7 @@
 package ptyx
 
 import (
+	"errors"
 	"io"
 	"os"
 )
@@ -10,7 +11,6 @@ type Console interface {
 	Out() io.Writer
 	Err() *os.File
 	IsATTYOut() bool
-	IsATTYErr() bool
 	Size() (int, int)
 	MakeRaw() (RawState, error)
 	Restore(RawState) error
@@ -18,6 +18,8 @@ type Console interface {
 	OnResize() <-chan struct{}
 	Close() error
 }
+
+func IsErrNotAConsole(err error) bool { return errors.Is(err, ErrNotAConsole) }
 
 type RawState interface{}
 

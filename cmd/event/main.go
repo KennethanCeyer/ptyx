@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,7 +58,7 @@ func main() {
 		Rows: h,
 	}
 
-	s, err := ptyx.Spawn(opts)
+	s, err := ptyx.Spawn(context.Background(), opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error spawning process:", err)
 		os.Exit(1)
@@ -65,10 +67,8 @@ func main() {
 
 	go processStream(os.Stdout, s.PtyReader())
 
-	if err := s.Wait(); err != nil {
-		if _, ok := err.(*ptyx.ExitError); !ok {
-			fmt.Fprintln(os.Stderr, "Wait error:", err)
-		}
+	if err := s.Wait(); err != nil && !errors.As(err, new(*ptyx.ExitError)) {
+		fmt.Fprintln(os.Stderr, "Wait error:", err)
 	}
 
 	fmt.Println("\n--- Event stream terminated ---")

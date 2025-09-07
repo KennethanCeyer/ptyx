@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 
 	"github.com/KennethanCeyer/ptyx"
 )
@@ -25,7 +26,7 @@ func ParseRunOpts(argv []string) (ptyx.SpawnOpts, error) {
 	fs.IntVar(&rows, "rows", 0, "")
 	fs.StringVar(&dir, "dir", "", "")
 	fs.Var(&env, "env", "KEY=VAL (repeatable)")
-	fs.SetOutput(nil)
+	fs.SetOutput(io.Discard)
 
 	if err := fs.Parse(argv); err != nil {
 		return ptyx.SpawnOpts{}, err

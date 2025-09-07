@@ -57,6 +57,9 @@ go run ./cmd/event
 # Send input to a program waiting in a PTY
 go run ./cmd/scan
 
+# Run a sequence of commands in a shell and handle interruption
+go run ./cmd/sequence
+
 # Run a shell inside a PTY, which itself runs inside a PTY
 go run ./cmd/nested
 
@@ -69,83 +72,154 @@ go run ./cmd/run -- bash -lc "echo hi; read -p 'press:' x; echo done"
 
 ## Use as a library
 
+`ptyx` is designed to be simple to use. Here are a few examples showing how to accomplish common tasks.
+
+### 1. Spawning a Non-Interactive Process
+
+This is the most basic use case: running a command in a pseudo-terminal and streaming its output.
+
 ```go
 package main
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"log"
 	"os"
+
+	"github.com/KennethanCeyer/ptyx"
+)
+
+func main() {
+	// Spawn a command in a new PTY session.
+	// A context is used for cancellation.
+	s, err := ptyx.Spawn(context.Background(), ptyx.SpawnOpts{
+		Prog: "ping",
+		Args: []string{"8.8.8.8"},
+	})
+	if err != nil {
+		log.Fatalf("spawn failed: %v", err)
+	}
+	// Ensure the session is closed to clean up resources.
+	defer s.Close()
+
+	// Stream the PTY output to standard out.
+	go io.Copy(os.Stdout, s.PtyReader())
+
+	// Wait for the process to exit.
+	if err := s.Wait(); err != nil {
+		log.Printf("process wait failed: %v", err)
+	}
+}
+```
+
+### 2. Creating a Full Interactive Shell
+
+For interactive applications like a terminal emulator, you need to connect the user's TTY to the PTY session. `ptyx` makes this easy.
+
+The following example creates a complete, cross-platform interactive shell.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
 	"runtime"
 
 	"github.com/KennethanCeyer/ptyx"
 )
 
 func main() {
+	// 1. Get a handle to the local console/TTY.
 	c, err := ptyx.NewConsole()
 	if err != nil {
 		log.Fatalf("failed to create console: %v", err)
 	}
 	defer c.Close()
+
+	// 2. Enable virtual terminal processing for color support (especially on Windows).
 	c.EnableVT()
 
+	// 3. Set the TTY to raw mode to pass all key presses directly to the PTY.
 	st, err := c.MakeRaw()
-	if err != nil {
-		log.Printf("failed to enter raw mode (this is expected when not in a TTY): %v", err)
-	} else {
+	if err == nil {
 		defer c.Restore(st)
 	}
 
+	// 4. Get the initial terminal size.
 	w, h := c.Size()
 	shell := "sh"
 	if runtime.GOOS == "windows" {
 		shell = "powershell.exe"
 	}
-	s, err := ptyx.Spawn(ptyx.SpawnOpts{Prog: shell, Cols: w, Rows: h})
+
+	// 5. Spawn the shell in a new PTY with the correct dimensions.
+	s, err := ptyx.Spawn(context.Background(), ptyx.SpawnOpts{Prog: shell, Cols: w, Rows: h})
 	if err != nil {
 		log.Fatalf("failed to spawn: %v", err)
 	}
 	defer s.Close()
 
+	// 6. Create a multiplexer to bridge I/O between the local TTY and the PTY.
 	m := ptyx.NewMux()
 	if err := m.Start(c, s); err != nil {
 		log.Fatalf("failed to start mux: %v", err)
 	}
 	defer m.Stop()
 
+	// 7. Handle terminal resize events.
 	go func() {
 		for range c.OnResize() {
-			if err := s.Resize(c.Size()); err != nil {
-				log.Printf("failed to resize: %v", err)
-			}
+			_ = s.Resize(c.Size())
 		}
 	}()
 
+	// 8. Wait for the PTY session to end.
 	if err := s.Wait(); err != nil {
 		if exitErr, ok := err.(*ptyx.ExitError); ok {
 			fmt.Printf("\nProcess exited with code %d\n", exitErr.ExitCode)
-		} else {
-			log.Fatalf("\nwait failed: %v", err)
 		}
 	}
 }
 ```
 
-### Run a program in PTY
+### 3. Cancelling a Process
+
+You can gracefully terminate a PTY session by cancelling its `context`. A common use case is handling user interruptions (e.g., `Ctrl+C`).
 
 ```go
-s, err := ptyx.Spawn(ptyx.SpawnOpts{Prog: "ping", Args: []string{"8.8.8.8"}})
-if err != nil {
-	log.Fatalf("spawn failed: %v", err)
-}
-defer s.Close()
+package main
 
-go io.Copy(os.Stdout, s.PtyReader())
-go io.Copy(s.PtyWriter(), os.Stdin)
+import (
+	"context"
+	"io"
+	"log"
+	"os"
+	"os/signal"
 
-if err := s.Wait(); err != nil {
-	log.Printf("process wait failed: %v", err)
+	"github.com/KennethanCeyer/ptyx"
+)
+
+func main() {
+	// Create a context that is cancelled when an interrupt signal is received.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	log.Println("Spawning 'ping' process. Press Ctrl+C to terminate.")
+	s, err := ptyx.Spawn(ctx, ptyx.SpawnOpts{Prog: "ping", Args: []string{"8.8.8.8"}})
+	if err != nil {
+		log.Fatalf("spawn failed: %v", err)
+	}
+	defer s.Close()
+
+	go io.Copy(os.Stdout, s.PtyReader())
+
+	// Wait for the process to exit. This will block until the context is cancelled.
+	if err := s.Wait(); err != nil {
+		log.Printf("Process terminated: %v", err)
+	}
 }
 ```
 
@@ -153,14 +227,15 @@ if err := s.Wait(); err != nil {
 
 ```go
 type Console interface {
+  In() io.Reader
+  Out() io.Writer
+  Err() *os.File
+  IsATTYOut() bool
   Size() (int, int)
   MakeRaw() (RawState, error)
   Restore(RawState) error
   EnableVT()
   OnResize() <-chan struct{}
-  In() io.Reader
-  Out() io.Writer
-  Err() io.Writer
   Close() error
 }
 
@@ -193,8 +268,6 @@ type ExitError struct {
   ExitCode int
 }
 
-// RawState is an opaque type that represents the terminal's state,
-// returned by MakeRaw() and passed to Restore().
 type RawState interface{}
 ```
 

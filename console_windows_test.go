@@ -14,6 +14,6 @@ func newPlatformTestConsole(t *testing.T) (Console, func()) {
 	}
 	c := &console{in: r, out: w, err: w}
 	c.outTTY = true
-	c.initWinWatcher()
-	return c, func() { r.Close(); w.Close() }
+	c.initResizeWatcher()
+	return c, func() { c.Close(); r.Close(); w.Close() }
 }
