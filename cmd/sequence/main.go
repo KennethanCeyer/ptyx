@@ -142,9 +142,9 @@ func runCommandSequence(ctx context.Context, cmdCh chan<- string, readyCh <-chan
 
 	var loadingCmd string
 	if runtime.GOOS == "windows" {
-		loadingCmd = "Write-Host 'Loading...'; for ($i=0; $i -le 25; $i++) { $p = '#' * $i; $r = ' ' * (25 - $i); $pct = $i * 4; Write-Host -NoNewline \"[$p$r] - $pct%`r\"; Start-Sleep -Milliseconds 20 }; echo ''"
+		loadingCmd = "Write-Host 'Loading...'; for ($i=0; $i -le 25; $i++) { $p = '#' * $i; $r = ' ' * (25 - $i); $pct = $i * 4; Write-Host -NoNewline \"[$p$r] - $pct%`r\"; Start-Sleep -Milliseconds 100 }; echo ''"
 	} else {
-		loadingCmd = "echo 'Loading...'; i=0; while [ $i -le 25 ]; do printf '['; j=0; while [ $j -lt $i ]; do printf '#'; j=$((j+1)); done; j=0; while [ $j -lt $((25-i)) ]; do printf ' '; j=$((j+1)); done; printf '] - %s%%' $((i*4)); printf '\r'; sleep 0.02; i=$((i+1)); done; echo ''"
+		loadingCmd = "echo 'Loading...'; i=0; while [ $i -le 25 ]; do printf '['; j=0; while [ $j -lt $i ]; do printf '#'; j=$((j+1)); done; j=0; while [ $j -lt $((25-i)) ]; do printf ' '; j=$((j+1)); done; printf '] - %s%%' $((i*4)); printf '\r'; sleep 0.1; i=$((i+1)); done; echo ''"
 	}
 
 	commands := []string{
