@@ -14,6 +14,12 @@ import (
 	"github.com/KennethanCeyer/ptyx"
 )
 
+var (
+	runtimeCallerFunc = runtime.Caller
+	newConsoleFunc    = ptyx.NewConsole
+	ptyxSpawnFunc     = ptyx.Spawn
+)
+
 type EventType string
 
 const (
@@ -33,7 +39,7 @@ func (e Event) String() string {
 }
 
 func main() {
-	_, b, _, ok := runtime.Caller(0)
+	_, b, _, ok := runtimeCallerFunc(0)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "Error: cannot determine project root")
 		os.Exit(1)
@@ -42,7 +48,7 @@ func main() {
 
 	fmt.Println("--- Starting 'go run ./cmd/spinner' and capturing output as events ---")
 
-	c, err := ptyx.NewConsole()
+	c, err := newConsoleFunc()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error creating console:", err)
 		os.Exit(1)
@@ -58,7 +64,7 @@ func main() {
 		Rows: h,
 	}
 
-	s, err := ptyx.Spawn(context.Background(), opts)
+	s, err := ptyxSpawnFunc(context.Background(), opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error spawning process:", err)
 		os.Exit(1)
@@ -67,8 +73,11 @@ func main() {
 
 	go processStream(os.Stdout, s.PtyReader())
 
-	if err := s.Wait(); err != nil && !errors.As(err, new(*ptyx.ExitError)) {
-		fmt.Fprintln(os.Stderr, "Wait error:", err)
+	if err := s.Wait(); err != nil {
+		var exitErr *ptyx.ExitError
+		if !errors.As(err, &exitErr) {
+			fmt.Fprintln(os.Stderr, "Wait error:", err)
+		}
 	}
 
 	fmt.Println("\n--- Event stream terminated ---")

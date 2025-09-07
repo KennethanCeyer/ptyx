@@ -11,7 +11,11 @@ import (
 
 var ErrNotAConsole = errors.New("ptyx: not a console")
 
-type resizeWatcher struct{ C chan struct{}; stop chan struct{} }
+type resizeWatcher struct {
+	C     chan struct{}
+	stop  chan struct{}
+	ready chan struct{}
+}
 
 type rawState struct{ st *term.State; fd int }
 
@@ -28,10 +32,7 @@ func NewConsole() (Console, error) {
 	if c.out == nil {
 		return nil, ErrNotAConsole
 	}
-	fd := int(c.out.Fd())
-	if !term.IsTerminal(fd) {
-		return nil, ErrNotAConsole
-	}
+	if !term.IsTerminal(int(c.out.Fd())) { return nil, ErrNotAConsole }
 	c.outTTY = true
 	c.errTTY = term.IsTerminal(int(c.err.Fd()))
 

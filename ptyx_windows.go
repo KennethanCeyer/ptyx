@@ -219,9 +219,7 @@ func (s *winSession) Wait() error {
 		return err
 	}
 	if atomic.LoadUint32(&s.killed) == 1 {
-		if code == 0 {
-			return &ExitError{ExitCode: 1, waitStatus: nil}
-		}
+		if code == 0 { return &ExitError{ExitCode: 1, waitStatus: nil} }
 		return &ExitError{ExitCode: int(code), waitStatus: nil}
 	}
 	if code == 0 {

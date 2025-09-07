@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -39,7 +38,7 @@ func Spawn(ctx context.Context, opts SpawnOpts) (sess Session, err error) {
 		cmd.Dir = opts.Dir
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = s, s, s
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	cmd.SysProcAttr = newSysProcAttr()
 
 	if opts.Cols > 0 && opts.Rows > 0 {
 		_ = setWinsize(int(m.Fd()), opts.Cols, opts.Rows)

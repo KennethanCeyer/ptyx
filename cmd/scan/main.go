@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +12,13 @@ import (
 	"time"
 
 	"github.com/KennethanCeyer/ptyx"
+)
+
+var (
+	runtimeCallerFunc = runtime.Caller
+	ptyxSpawnFunc     = ptyx.Spawn
+	timeAfterFunc     = time.After
+	stdout            = io.Writer(os.Stdout)
 )
 
 type promptDetector struct {
@@ -38,24 +44,26 @@ func (d *promptDetector) Read(p []byte) (n int, err error) {
 }
 
 func main() {
-	_, b, _, ok := runtime.Caller(0)
+	_, b, _, ok := runtimeCallerFunc(0)
 	if !ok {
-		log.Fatal("Error: cannot determine project root")
+		fmt.Fprintln(os.Stderr, "Error: cannot determine project root")
+		os.Exit(1)
 	}
 	projectRoot := filepath.Join(filepath.Dir(b), "..", "..")
 
 	targetProg := "go"
 	targetArgs := []string{"run", "./cmd/internal/scan-target"}
 
-	fmt.Println("--- Spawning a program that waits for `Scanln` in a PTY. ---")
+	fmt.Fprintln(stdout, "--- Spawning a program that waits for `Scanln` in a PTY. ---")
 
-	s, err := ptyx.Spawn(context.Background(), ptyx.SpawnOpts{
+	s, err := ptyxSpawnFunc(context.Background(), ptyx.SpawnOpts{
 		Prog: targetProg,
 		Args: targetArgs,
 		Dir:  projectRoot,
 	})
 	if err != nil {
-		log.Fatalf("Failed to spawn: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to spawn: %v\n", err)
+		os.Exit(1)
 	}
 	defer s.Close()
 
@@ -66,23 +74,25 @@ func main() {
 		promptFound: promptFound,
 	}
 
-	go io.Copy(os.Stdout, detector)
+	go io.Copy(stdout, detector)
 
 	select {
 	case <-promptFound:
-	case <-time.After(10 * time.Second):
-		log.Fatal("Timeout: Did not find expected prompt in PTY output.")
+	case <-timeAfterFunc(10 * time.Second):
+		fmt.Fprintln(os.Stderr, "Timeout: Did not find expected prompt in PTY output.")
+		os.Exit(1)
 	}
 
 	inputToSend := "World"
-	fmt.Fprintf(os.Stdout, "\n\n[DEMO] Found prompt. Sending input '%s\\n' to the PTY to unblock Scanln...\n", inputToSend)
+	fmt.Fprintf(stdout, "\n\n[DEMO] Found prompt. Sending input '%s\\n' to the PTY to unblock Scanln...\n", inputToSend)
 
 	_, err = fmt.Fprintf(s.PtyWriter(), "%s\r\n", inputToSend)
 	if err != nil {
-		log.Fatalf("Failed to write to PTY: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to write to PTY: %v\n", err)
+		os.Exit(1)
 	}
 
 	s.Wait()
 
-	fmt.Println("\n[DEMO] Program finished.")
+	fmt.Fprintln(stdout, "\n[DEMO] Program finished.")
 }

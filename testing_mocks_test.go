@@ -7,32 +7,36 @@ import (
 )
 
 type mockConsole struct {
-	in     io.Reader
+	in     io.ReadCloser
 	outBuf *bytes.Buffer
 }
 
 func newMockConsole(input string) *mockConsole {
-	return &mockConsole{
-		in:     bytes.NewBufferString(input),
-		outBuf: &bytes.Buffer{},
-	}
+	r, w := io.Pipe()
+	go func() {
+		defer w.Close()
+		if input != "" {
+			_, _ = io.WriteString(w, input)
+		}
+	}()
+	return &mockConsole{in: r, outBuf: &bytes.Buffer{}}
 }
 
-func (m *mockConsole) In() io.Reader               { return m.in }
-func (m *mockConsole) Out() io.Writer              { return m.outBuf }
-func (m *mockConsole) Err() *os.File               { panic("not implemented") }
-func (m *mockConsole) IsATTYOut() bool             { return true }
-func (m *mockConsole) IsATTYErr() bool             { return true }
-func (m *mockConsole) Size() (int, int)            { return 80, 24 }
+func (m *mockConsole) In() io.Reader             { return m.in }
+func (m *mockConsole) Out() io.Writer            { return m.outBuf }
+func (m *mockConsole) Err() *os.File             { panic("not implemented") }
+func (m *mockConsole) IsATTYOut() bool           { return true }
+func (m *mockConsole) Size() (int, int)          { return 80, 24 }
 func (m *mockConsole) MakeRaw() (RawState, error)  { return nil, nil }
 func (m *mockConsole) Restore(RawState) error      { return nil }
-func (m *mockConsole) EnableVT()                   {}
+func (m *mockConsole) EnableVT()                 {}
 func (m *mockConsole) OnResize() <-chan struct{}   { return make(chan struct{}) }
-func (m *mockConsole) Close() error                { return nil }
+func (m *mockConsole) Close() error              { return m.in.Close() }
 
 type mockSession struct {
 	ptyIn  *bytes.Buffer
 	ptyOut io.Reader
+	closeStdinFunc func() error
 }
 
 func newMockSession(output string) *mockSession {
@@ -49,4 +53,9 @@ func (m *mockSession) Wait() error                 { return nil }
 func (m *mockSession) Kill() error                 { return nil }
 func (m *mockSession) Close() error                { return nil }
 func (m *mockSession) Pid() int                    { return 1234 }
-func (m *mockSession) CloseStdin() error           { return nil }
+func (m *mockSession) CloseStdin() error {
+	if m.closeStdinFunc != nil {
+		return m.closeStdinFunc()
+	}
+	return nil
+}

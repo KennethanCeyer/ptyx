@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/KennethanCeyer/ptyx"
@@ -25,14 +24,12 @@ func main() {
 		shell = "cmd.exe"
 	}
 
-	spawnCtx, cancel := context.WithTimeout(baseCtx, 10*time.Second)
+	spawnCtx, cancel := context.WithTimeout(baseCtx, 15*time.Second)
 	defer cancel()
 
 	fmt.Printf("[DEMO] Spawning shell '%s' in a PTY...\n", shell)
 	s, err := ptyx.Spawn(spawnCtx, ptyx.SpawnOpts{Prog: shell})
-	if err != nil {
-		log.Fatalf("Failed to spawn: %v", err)
-	}
+	if err != nil { log.Fatalf("Failed to spawn: %v", err) }
 	defer s.Close()
 
 	if os.Getenv("PTYX_TEST_MODE") == "" {
@@ -46,28 +43,12 @@ func main() {
 	fmt.Println("[DEMO] Running command sequence...")
 	waitErr := runCommandSequence(s)
 
-	fmt.Println("\n--- Wait Result ---")
-	if waitErr != nil {
-		fmt.Printf("Go error: %v\n", waitErr)
-		var exitErr *ptyx.ExitError
-		if errors.As(waitErr, &exitErr) {
-			fmt.Printf("Exit code: %d\n", exitErr.ExitCode)
-			if runtime.GOOS != "windows" {
-				if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-					fmt.Printf("Terminated by signal: %s\n", ws.Signal())
-				}
-			}
-		}
-		if spawnCtx.Err() != nil {
-			fmt.Println("[DEMO] Process was interrupted.")
-		}
-		os.Exit(1)
-	} else {
-		fmt.Println("\n[DEMO] Process finished naturally.")
-		fmt.Println("Process exited successfully with code 0.")
+	exitCode, output := handleWaitResult(spawnCtx, waitErr)
+	fmt.Print(output)
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
-
 func runCommandSequence(s ptyx.Session) error {
 	const ready = "[[PTYX_READY]]"
 	const done = "[[PTYX_DONE]]"
@@ -81,7 +62,6 @@ func runCommandSequence(s ptyx.Session) error {
 		for sc.Scan() {
 			line := strings.TrimRight(sc.Text(), "\r")
 			fmt.Fprintln(os.Stdout, line)
-			_ = os.Stdout.Sync()
 			if strings.TrimSpace(line) == done {
 				select { case cmdDone <- struct{}{}: default: }
 			}
@@ -100,4 +80,25 @@ func runCommandSequence(s ptyx.Session) error {
 	}
 
 	return s.Wait()
+}
+
+func handleWaitResult(spawnCtx context.Context, waitErr error) (int, string) {
+	var b strings.Builder
+	b.WriteString("\n--- Wait Result ---\n")
+	if waitErr != nil {
+		fmt.Fprintf(&b, "Go error: %v\n", waitErr)
+		var exitErr *ptyx.ExitError
+		if errors.As(waitErr, &exitErr) {
+			fmt.Fprintf(&b, "Exit code: %d\n", exitErr.ExitCode)
+			b.WriteString(checkSignal(waitErr))
+		}
+		if spawnCtx.Err() != nil {
+			b.WriteString("[DEMO] Process was interrupted.\n")
+		}
+		return 1, b.String()
+	}
+
+	b.WriteString("\n[DEMO] Process finished naturally.\n")
+	b.WriteString("Process exited successfully with code 0.\n")
+	return 0, b.String()
 }

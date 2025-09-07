@@ -9,11 +9,15 @@ import (
 	"runtime"
 
 	"github.com/KennethanCeyer/ptyx"
-	"github.com/KennethanCeyer/ptyx/cmd/internal"
+)
+
+var (
+	runtimeCallerFunc  = runtime.Caller
+	runInteractiveFunc = ptyx.RunInteractive
 )
 
 func main() {
-	_, b, _, ok := runtime.Caller(0)
+	_, b, _, ok := runtimeCallerFunc(0)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "Error: cannot determine project root")
 		os.Exit(1)
@@ -28,7 +32,7 @@ func main() {
 		Dir:  projectRoot,
 	}
 
-	err := internal.RunInPty(context.Background(), opts)
+	err := runInteractiveFunc(context.Background(), opts)
 	if err != nil {
 		var exitErr *ptyx.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode != 0 {

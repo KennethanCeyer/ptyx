@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/KennethanCeyer/ptyx"
@@ -90,4 +95,73 @@ func TestParseRunOpts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRun_HelperProcess(t *testing.T) {
+	if os.Getenv("PTYX_RUN_CMD_HELPER") != "1" {
+		return
+	}
+
+	switch os.Getenv("TEST_MODE") {
+	case "parse_error":
+		parseRunOptsFunc = func(argv []string) (ptyx.SpawnOpts, error) {
+			return ptyx.SpawnOpts{}, errors.New("mocked parse error")
+		}
+	case "run_error":
+		parseRunOptsFunc = func(argv []string) (ptyx.SpawnOpts, error) {
+			return ptyx.SpawnOpts{Prog: "sh"}, nil
+		}
+		runInteractiveFunc = func(ctx context.Context, opts ptyx.SpawnOpts) error {
+			return errors.New("mocked run error")
+		}
+	default:
+		parseRunOptsFunc = func(argv []string) (ptyx.SpawnOpts, error) {
+			return ptyx.SpawnOpts{Prog: "sh"}, nil
+		}
+		runInteractiveFunc = func(ctx context.Context, opts ptyx.SpawnOpts) error {
+			return nil
+		}
+	}
+	main()
+	os.Exit(0)
+}
+
+func TestRun_MainExecution(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRun_HelperProcess$")
+		cmd.Env = append(os.Environ(), "PTYX_RUN_CMD_HELPER=1", "TEST_MODE=success")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("process should have succeeded, but failed: %v\noutput: %s", err, string(output))
+		}
+		if len(output) > 0 {
+			t.Errorf("expected no output, got: %s", string(output))
+		}
+	})
+
+	t.Run("parse error", func(t *testing.T) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRun_HelperProcess$")
+		cmd.Env = append(os.Environ(), "PTYX_RUN_CMD_HELPER=1", "TEST_MODE=parse_error")
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("process should have failed, but it succeeded")
+		}
+		outStr := string(output)
+		if !strings.Contains(outStr, "mocked parse error") {
+			t.Errorf("expected parse error message, got: %s", outStr)
+		}
+	})
+
+	t.Run("run error", func(t *testing.T) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRun_HelperProcess$")
+		cmd.Env = append(os.Environ(), "PTYX_RUN_CMD_HELPER=1", "TEST_MODE=run_error")
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("process should have failed, but it succeeded")
+		}
+		outStr := string(output)
+		if !strings.Contains(outStr, "Error: mocked run error") {
+			t.Errorf("expected run error message, got: %s", outStr)
+		}
+	})
 }

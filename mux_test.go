@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 )
 
 type errorReader struct{}
@@ -24,10 +25,27 @@ func TestMux(t *testing.T) {
 		c := newMockConsole(consoleInput)
 		s := newMockSession("")
 
+		ptyOutR, ptyOutW := io.Pipe()
+		s.ptyOut = ptyOutR
+
+		closedStdin := make(chan struct{})
+		s.closeStdinFunc = func() error {
+			close(closedStdin)
+			return nil
+		}
+
 		m := NewMux()
 		if err := m.Start(c, s); err != nil {
 			t.Fatalf("Mux.Start() failed: %v", err)
 		}
+
+		select {
+		case <-closedStdin:
+		case <-time.After(1 * time.Second):
+			t.Fatal("timed out waiting for console->pty copy to complete")
+		}
+
+		ptyOutW.Close()
 
 		if err := m.Stop(); err != nil {
 			t.Fatalf("Mux.Stop() failed: %v", err)

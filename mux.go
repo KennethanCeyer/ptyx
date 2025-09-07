@@ -2,8 +2,6 @@ package ptyx
 
 import (
 	"io"
-	"os"
-	"runtime"
 	"sync"
 )
 
@@ -16,6 +14,7 @@ const (
 type mux struct {
 	cancel func()
 	wg     sync.WaitGroup
+	closeStdinOnce sync.Once
 
 	mu    sync.Mutex
 	state int
@@ -43,37 +42,30 @@ func (m *mux) Start(c Console, s Session) error {
 	go func() {
 		defer m.wg.Done()
 		_, _ = io.Copy(s.PtyWriter(), c.In())
+		m.closeStdinOnce.Do(func() { _ = s.CloseStdin() })
 	}()
 
 	go func() {
 		defer m.wg.Done()
 		_, _ = io.Copy(c.Out(), s.PtyReader())
-		if runtime.GOOS != "windows" {
-			if closer, ok := c.In().(*os.File); ok {
-				_ = closer.Close()
-			}
-		}
+
+		m.closeStdinOnce.Do(func() { _ = s.CloseStdin() })
 	}()
 	return nil
 }
 
 func (m *mux) Stop() error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.state == muxRunning {
 		m.state = muxStopped
-		if m.cancel != nil {
-			m.cancel()
-		}
-		if m.s != nil {
-			_ = m.s.CloseStdin()
-		}
-		if runtime.GOOS != "windows" && m.c != nil {
-			if f, ok := m.c.In().(*os.File); ok {
-				_ = f.Close()
+		if m.c != nil {
+			if closer, ok := m.c.In().(io.Closer); ok {
+				_ = closer.Close()
 			}
 		}
 	}
-	m.mu.Unlock()
 
 	m.wg.Wait()
 	return nil

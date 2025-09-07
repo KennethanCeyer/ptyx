@@ -9,11 +9,16 @@ import (
 	"runtime"
 
 	"github.com/KennethanCeyer/ptyx"
-	"github.com/KennethanCeyer/ptyx/cmd/internal"
+)
+
+var (
+	getProjectRootFunc = getProjectRoot
+	runInteractiveFunc = ptyx.RunInteractive
+	runtimeCaller      = runtime.Caller
 )
 
 func getProjectRoot() (string, error) {
-	_, b, _, ok := runtime.Caller(0)
+	_, b, _, ok := runtimeCaller(0)
 	if !ok {
 		return "", errors.New("cannot determine project root: runtime.Caller failed")
 	}
@@ -22,7 +27,7 @@ func getProjectRoot() (string, error) {
 }
 
 func main() {
-	projectRoot, err := getProjectRoot()
+	projectRoot, err := getProjectRootFunc()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -36,7 +41,7 @@ func main() {
 		Dir:  projectRoot,
 	}
 
-	err = internal.RunInPty(context.Background(), opts)
+	err = runInteractiveFunc(context.Background(), opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 	}

@@ -25,17 +25,17 @@ func (c *console) EnableVT() {
 }
 
 func (c *console) initResizeWatcher() {
-	c.win = &resizeWatcher{C: make(chan struct{}, 1), stop: make(chan struct{})}
+	c.win = &resizeWatcher{C: make(chan struct{}, 1), stop: make(chan struct{}), ready: make(chan struct{})}
 	go func() {
 		t := time.NewTicker(200 * time.Millisecond)
 		defer t.Stop()
 		defer close(c.win.C)
+		close(c.win.ready)
 		for {
 			select {
 			case <-t.C:
 				select { case c.win.C <- struct{}{}: default: }
-			case <-c.win.stop:
-				return
+			case <-c.win.stop: return
 			}
 		}
 	}()

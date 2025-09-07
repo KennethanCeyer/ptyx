@@ -2,21 +2,24 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 
-	"github.com/KennethanCeyer/ptyx/cmd/internal"
+	"github.com/KennethanCeyer/ptyx"
+)
+
+var (
+	parseResizeOptsFunc = ParseResizeOpts
+	runInteractiveFunc  = ptyx.RunInteractive
 )
 
 func main() {
-	flag.Parse()
-	opts, err := ParseResizeOpts(flag.Args())
+	opts, err := parseResizeOptsFunc(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := internal.RunInPty(context.Background(), opts); err != nil {
+	if err := runInteractiveFunc(context.Background(), opts); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}

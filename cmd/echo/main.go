@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
+	"os"
 
 	"github.com/KennethanCeyer/ptyx"
+)
+
+var (
+	newConsoleFunc = ptyx.NewConsole
 )
 
 func echoLoop(in io.Reader, out io.Writer, errOut io.Writer) {
@@ -33,9 +37,10 @@ func echoLoop(in io.Reader, out io.Writer, errOut io.Writer) {
 }
 
 func main() {
-	c, err := ptyx.NewConsole()
+	c, err := newConsoleFunc()
 	if err != nil {
-		log.Fatalf("failed to create console: %v", err)
+		fmt.Fprintf(os.Stderr, "failed to create console: %v\n", err)
+		os.Exit(1)
 	}
 	defer c.Close()
 

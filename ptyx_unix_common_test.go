@@ -33,6 +33,35 @@ func TestHelperProcess(t *testing.T) {
 	_ = os.Stdout.Sync()
 }
 
+func TestOpenPTY(t *testing.T) {
+	master, slave, err := openPTY()
+	if err != nil {
+		t.Fatalf("openPTY() failed: %v", err)
+	}
+	if master == nil {
+		t.Fatal("openPTY() returned nil master")
+	}
+	if slave == nil {
+		t.Fatal("openPTY() returned nil slave")
+	}
+
+	if _, err := master.Stat(); err != nil {
+		t.Errorf("master.Stat() failed: %v", err)
+	}
+	if _, err := slave.Stat(); err != nil {
+		t.Errorf("slave.Stat() failed: %v", err)
+	}
+
+	errMaster := master.Close()
+	errSlave := slave.Close()
+	if errMaster != nil {
+		t.Errorf("failed to close master: %v", errMaster)
+	}
+	if errSlave != nil {
+		t.Errorf("failed to close slave: %v", errSlave)
+	}
+}
+
 func TestUnixSpawn(t *testing.T) {
 	t.Run("EmptyProgram", func(t *testing.T) {
 		_, err := Spawn(context.Background(), SpawnOpts{Prog: ""})
@@ -244,9 +273,7 @@ func readPTYOneLine(r io.Reader) (string, error) {
 	for {
 		b, err := br.ReadByte()
 		if err != nil {
-			if isPTYEOF(err) || errors.Is(err, io.EOF) {
-				return buf.String(), err
-			}
+			if isPTYEOF(err) || errors.Is(err, io.EOF) { return buf.String(), err }
 			return "", err
 		}
 		buf.WriteByte(b)

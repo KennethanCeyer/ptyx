@@ -24,7 +24,14 @@ func main() {
 	defer c.Close()
 	c.EnableVT()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	runSpinner(appCtx, c)
+}
+
+func runSpinner(ctx context.Context, c ptyx.Console) {
+	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
 	go func() {

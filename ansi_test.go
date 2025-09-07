@@ -1,23 +1,47 @@
 package ptyx
 
 import (
-	"fmt"
 	"testing"
 )
 
 func TestCSI(t *testing.T) {
-	seq := "2J"
-	expected := "\x1b[2J"
-	if got := CSI(seq); got != expected {
-		t.Errorf("CSI(%q) = %q; want %q", seq, got, expected)
+	tests := []struct {
+		name string
+		seq  string
+		want string
+	}{
+		{"Simple sequence", "2J", "\x1b[2J"},
+		{"Empty sequence", "", "\x1b["},
+		{"Sequence with numbers and symbols", "1;31m", "\x1b[1;31m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CSI(tt.seq); got != tt.want {
+				t.Errorf("CSI(%q) = %q; want %q", tt.seq, got, tt.want)
+			}
+		})
 	}
 }
 
 func TestCUP(t *testing.T) {
-	row, col := 10, 20
-	expected := fmt.Sprintf("\x1b[%d;%dH", row, col)
-	if got := CUP(row, col); got != expected {
-		t.Errorf("CUP(%d, %d) = %q; want %q", row, col, got, expected)
+	tests := []struct {
+		name string
+		row  int
+		col  int
+		want string
+	}{
+		{"Standard position", 10, 20, "\x1b[10;20H"},
+		{"Top-left corner", 1, 1, "\x1b[1;1H"},
+		{"Zero values", 0, 0, "\x1b[0;0H"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CUP(tt.row, tt.col); got != tt.want {
+				t.Errorf("CUP(%d, %d) = %q; want %q", tt.row, tt.col, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -27,9 +51,11 @@ func TestSGR(t *testing.T) {
 		codes []int
 		want  string
 	}{
-		{"Reset", []int{}, "\x1b[0m"},
-		{"SingleCode", []int{31}, "\x1b[31m"},
-		{"MultipleCodes", []int{1, 32, 44}, "\x1b[1;32;44m"},
+		{"Reset (no codes)", []int{}, "\x1b[0m"},
+		{"Single code", []int{31}, "\x1b[31m"},
+		{"Multiple codes", []int{1, 32, 44}, "\x1b[1;32;44m"},
+		{"Zero code", []int{0}, "\x1b[0m"},
+		{"Negative code", []int{-1}, "\x1b[-1m"},
 	}
 
 	for _, tt := range tests {

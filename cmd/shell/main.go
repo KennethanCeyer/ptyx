@@ -8,7 +8,10 @@ import (
 	"os"
 
 	"github.com/KennethanCeyer/ptyx"
-	"github.com/KennethanCeyer/ptyx/cmd/internal"
+)
+
+var (
+	runInteractiveFunc = ptyx.RunInteractive
 )
 
 func main() {
@@ -18,7 +21,7 @@ func main() {
 		Prog: defaultShell(),
 		Args: flag.Args(),
 	}
-	err := internal.RunInPty(context.Background(), opts)
+	err := runInteractiveFunc(context.Background(), opts)
 	if err == nil {
 		return
 	}
