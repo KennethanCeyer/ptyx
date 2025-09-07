@@ -90,59 +90,59 @@ func runCommandSequence(ctx context.Context, s ptyx.Session) error {
 		}
 	}()
 
-	run := func(cmd string) error {
-		separator := ";"
-		if runtime.GOOS == "windows" {
-			separator = "&"
-		}
-
-		fullCmd := fmt.Sprintf("%s %s echo %s", cmd, separator, marker)
-		if _, err := fmt.Fprintf(s.PtyWriter(), "%s\r\n", fullCmd); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-cmdDone:
-			return nil
-		}
-	}
-
 	var initialCmds []string
 	var commands []string
 	var loadingCmd string
 	if runtime.GOOS == "windows" {
-		initialCmds = []string{"@echo off"}
-		loadingCmd = "echo Loading... & ping -n 4 127.0.0.1 > nul"
+		initialCmds = []string{"echo off"}
+		sleepDuration := "3"
+		loadingCmd = fmt.Sprintf("echo Loading... & powershell.exe -Command \"Start-Sleep -Seconds %s\"", sleepDuration)
 		commands = []string{
 			"cd",
 			loadingCmd,
 		}
 	} else {
 		initialCmds = []string{"stty -echo"}
-		loadingCmd = "echo Loading...; sleep 5"
+		sleepDuration := "3"
+		loadingCmd = fmt.Sprintf("echo Loading...; sleep %s", sleepDuration)
 		commands = []string{
 			"pwd",
 			loadingCmd,
 		}
 	}
 
+	separator := "&&"
+
 	sequence := append(initialCmds, commands...)
 	for _, cmd := range sequence {
-		if err := run(cmd); err != nil {
-			originalErr := err
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				s.Kill()
-			}
+		select {
+		case <-ctx.Done():
+			err := ctx.Err()
+			s.Kill()
 			_ = s.Wait()
-			return originalErr
+			return err
+		default:
+		}
+
+		fullCmd := fmt.Sprintf("(%s) %s echo %s", cmd, separator, marker)
+		if _, err := fmt.Fprintf(s.PtyWriter(), "%s\r\n", fullCmd); err != nil {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			err := ctx.Err()
+			s.Kill()
+			_ = s.Wait()
+			return err
+		case <-cmdDone:
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, "\n[DEMO] Command sequence finished.")
 	if _, err := fmt.Fprintf(s.PtyWriter(), "exit 0\r\n"); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "\n[DEMO] Command sequence finished.")
 	return s.Wait()
 }
